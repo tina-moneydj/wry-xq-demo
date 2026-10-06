@@ -309,6 +309,135 @@
     obv: b => { const out = []; let v = 0; b.forEach((x, i) => { if (i) v += x.c > b[i - 1].c ? x.v : x.c < b[i - 1].c ? -x.v : 0; out.push(v); }); return { obv: out }; },
   };
 
+  // ---------- 增量更新（只改最後一根／短尾巴，給高頻 tick 用）----------
+  const HEAVY_IND = { bb: 1, sar: 1, kd: 1, macd: 1, wr: 1, dmi: 1 };
+  function smaAt(src, n, i) {
+    if (i < n - 1) return NaN;
+    let s = 0;
+    for (let j = i - n + 1; j <= i; j++) s += src[j];
+    return s / n;
+  }
+  function emaStep(prev, v, n) {
+    const a = 2 / (n + 1);
+    return prev + a * (v - prev);
+  }
+  function patchOverlayLast(type, ov, out, bars, i, lightOnly, closes) {
+    if (!out || i < 0) return false;
+    if (lightOnly && HEAVY_IND[type]) return false;
+    if (type === "ma" || type === "ema") {
+      if (!out.line || out.line.length !== bars.length) return false;
+      const n = +ov.period || (type === "ema" ? 12 : 20);
+      if (type === "ma") {
+        out.line[i] = smaAt(closes || bars.map(x => x.c), n, i);
+      } else if (i === 0) out.line[i] = bars[0].c;
+      else if (Number.isFinite(out.line[i - 1])) out.line[i] = emaStep(out.line[i - 1], bars[i].c, n);
+      else return false;
+      return true;
+    }
+    if (type === "bb") {
+      if (!out.mid || out.mid.length !== bars.length) return false;
+      const n = +ov.n || 20, k = +ov.k || 2;
+      const csrc = closes || bars.map(x => x.c);
+      const mid = smaAt(csrc, n, i);
+      out.mid[i] = mid;
+      if (!Number.isFinite(mid)) { out.up[i] = NaN; out.lo[i] = NaN; return true; }
+      let s = 0;
+      for (let j = i - n + 1; j <= i; j++) s += (csrc[j] - mid) * (csrc[j] - mid);
+      const sd = Math.sqrt(s / n);
+      out.up[i] = mid + k * sd; out.lo[i] = mid - k * sd;
+      return true;
+    }
+    if (type === "sar") {
+      if (!out.sar || out.sar.length !== bars.length) return false;
+      const from = Math.max(0, i - 3);
+      const slice = bars.slice(from);
+      const part = CALC.sar(slice, { step: +ov.step || 0.02, max: +ov.max || 0.2 });
+      for (let j = 0; j < part.sar.length; j++) {
+        out.sar[from + j] = part.sar[j];
+        out.up[from + j] = part.up[j];
+      }
+      return true;
+    }
+    return false;
+  }
+  function patchSubLast(id, p, out, bars, i, lightOnly, vols) {
+    if (!out || i < 0) return false;
+    if (lightOnly && HEAVY_IND[id]) return false;
+    if (id === "volma") {
+      if (!out.a || out.a.length !== bars.length) return false;
+      const vsrc = vols || bars.map(x => x.v);
+      out.a[i] = smaAt(vsrc, p.p1, i);
+      out.b[i] = smaAt(vsrc, p.p2, i);
+      return true;
+    }
+    if (id === "kd") {
+      if (!out.k || out.k.length !== bars.length) return false;
+      const [hi, lo] = highLow(bars, i, p.n);
+      const rsv = hi > lo ? ((bars[i].c - lo) / (hi - lo)) * 100 : 50;
+      const prevK = i && Number.isFinite(out.k[i - 1]) ? out.k[i - 1] : 50;
+      const prevD = i && Number.isFinite(out.d[i - 1]) ? out.d[i - 1] : 50;
+      const pk = ((p.k - 1) * prevK + rsv) / p.k;
+      const pd = ((p.d - 1) * prevD + pk) / p.d;
+      out.k[i] = i >= p.n - 1 ? pk : NaN;
+      out.d[i] = i >= p.n - 1 ? pd : NaN;
+      return true;
+    }
+    if (id === "macd") {
+      if (!out.dif || out.dif.length !== bars.length) return false;
+      const need = Math.max(80, (p.slow || 26) + (p.sig || 9) + 8);
+      const from = Math.max(0, bars.length - need);
+      const part = CALC.macd(bars.slice(from), p);
+      const li = part.dif.length - 1;
+      out.dif[i] = part.dif[li]; out.dea[i] = part.dea[li]; out.osc[i] = part.osc[li];
+      return true;
+    }
+    if (id === "rsi") {
+      if (!out.rsi || out.rsi.length !== bars.length) return false;
+      const need = Math.max(40, (p.n || 14) * 3 + 5);
+      const from = Math.max(0, bars.length - need);
+      const part = CALC.rsi(bars.slice(from), p);
+      out.rsi[i] = part.rsi[part.rsi.length - 1];
+      return true;
+    }
+    if (id === "wr") {
+      if (!out.wr || out.wr.length !== bars.length) return false;
+      if (i < p.n - 1) { out.wr[i] = NaN; return true; }
+      const [hi, lo] = highLow(bars, i, p.n);
+      out.wr[i] = hi > lo ? ((hi - bars[i].c) / (hi - lo)) * -100 : -50;
+      return true;
+    }
+    if (id === "dmi") {
+      if (!out.pdi || out.pdi.length !== bars.length) return false;
+      const need = Math.max(50, (p.n || 14) * 3 + 10);
+      const from = Math.max(0, bars.length - need);
+      const part = CALC.dmi(bars.slice(from), p);
+      const li = part.pdi.length - 1;
+      out.pdi[i] = part.pdi[li]; out.mdi[i] = part.mdi[li]; out.adx[i] = part.adx[li];
+      return true;
+    }
+    if (id === "atr") {
+      if (!out.atr || out.atr.length !== bars.length) return false;
+      const tr = trueRange(bars, i), n = p.n;
+      if (i < n - 1) out.atr[i] = NaN;
+      else if (i === n - 1) {
+        let s = 0; for (let j = 0; j <= i; j++) s += trueRange(bars, j);
+        out.atr[i] = s / n;
+      } else if (Number.isFinite(out.atr[i - 1])) out.atr[i] = (out.atr[i - 1] * (n - 1) + tr) / n;
+      else return false;
+      return true;
+    }
+    if (id === "obv") {
+      if (!out.obv || out.obv.length !== bars.length) return false;
+      if (i === 0) out.obv[i] = 0;
+      else {
+        const prev = Number.isFinite(out.obv[i - 1]) ? out.obv[i - 1] : 0;
+        out.obv[i] = prev + (bars[i].c > bars[i - 1].c ? bars[i].v : bars[i].c < bars[i - 1].c ? -bars[i].v : 0);
+      }
+      return true;
+    }
+    return false;
+  }
+
   // ---------- 格式 ----------
   const pad2 = n => String(n).padStart(2, "0");
   function fmtTime(t, period, long) {
@@ -352,6 +481,7 @@
     let lastCfg = null, metaCb = null;
     let tool = "cursor", drawTool = "trend", selected = -1;
     let mouse = null, pan = null, pending = null, drag = null, layout = null;
+    let interactionBusy = false; // 拖曳／平移時略過重指標增量，鬆手再全量補一次
     let cssW = 0, cssH = 0;
     // ---------- 繪圖層快取 + 空間索引（效能）----------
     const drawLayer = document.createElement("canvas");
@@ -805,7 +935,9 @@
             for (const ov of (entry.overlays || [])) {
               const m = overlayCalc(ov);
               if (m.line) take(m.line[i]);
-              if (m.up) { take(m.up[i]); take(m.lo[i]); }
+              // BB 上下軌（勿把 SAR 的 up[] 布林方向旗標當成布林通道）
+              if (m.lo && m.up && !m.sar) { take(m.up[i]); take(m.lo[i]); }
+              if (m.mid) take(m.mid[i]);
               if (m.sar) take(m.sar[i]);
             }
           }
@@ -1331,7 +1463,8 @@
         if (hit) {
           selected = hit.idx;
           drag = { idx: hit.idx, handle: hit.handle, start: toAnchor(p), orig: clone(drawings()[hit.idx].pts), moved: false };
-        } else { selected = -1; pan = { x: p.x, right: view().right }; }
+        } else { selected = -1; pan = { x: p.x, right: view().right }; interactionBusy = true; }
+        if (hit) interactionBusy = true;
         if (selected !== prevSel) markDrawingsDirty();
       }
       sync(); requestRender();
@@ -1367,8 +1500,13 @@
       requestRender();
     });
     window.addEventListener("mouseup", e => {
+      const wasBusy = interactionBusy || pan || drag;
       if (pan) pan = null;
       if (drag) { if (drag.moved) { save(); markDrawingsDirty(); } drag = null; }
+      if (wasBusy) {
+        interactionBusy = false;
+        invalidateSeriesMemo(); // 鬆手後補齊重指標
+      }
       if (pending && pending.dragging) {
         const p = local(e);
         pending.dragging = false;
@@ -1396,14 +1534,48 @@
       if (e.key === "Escape") { pending = null; tool = "cursor"; if (selected >= 0) markDrawingsDirty(); selected = -1; closeMenus(); sync(); requestRender(); }
     });
 
-    // ---------- 即時行情 tick（高頻）：只動最後一根／指標 memo，畫線層沿用快取 ----------
+    // ---------- 即時行情 tick（高頻）：增量改最後一根指標，避免每 tick 全量 memo ----------
     function invalidateSeriesMemo() {
       const s = quote && entry ? series() : null;
       if (s) s.memo = {};
-      // 同源日線也清（週／月／分時可能共用 daily 衍生）
       if (quote) {
         const dk = `${quote.symbol}|D`;
         if (cache[dk]) cache[dk].memo = {};
+      }
+    }
+    function patchIndicatorsOnTick(opts) {
+      opts = opts || {};
+      const s = series();
+      if (!s || !s.bars.length) return;
+      const bars = s.bars;
+      const i = bars.length - 1;
+      const lightOnly = !!(opts.lightOnly || interactionBusy || pan || drag);
+      const keys = Object.keys(s.memo);
+      if (!keys.length) return;
+      // 共用 closes/vols，避免每個指標 map 一次
+      let closes = null, vols = null;
+      const needCloses = keys.some(k => k.startsWith("ov:ma") || k.startsWith("ov:ema") || k.startsWith("ov:bb") || k.startsWith("macd") || k.startsWith("rsi"));
+      const needVols = keys.some(k => k.startsWith("volma"));
+      if (needCloses) closes = bars.map(x => x.c);
+      if (needVols) vols = bars.map(x => x.v);
+      for (const key of keys) {
+        const val = s.memo[key];
+        if (!val) continue;
+        try {
+          if (key.startsWith("ov:")) {
+            const brace = key.indexOf("{");
+            if (brace < 0) continue;
+            const type = key.slice(3, brace);
+            const ov = JSON.parse(key.slice(brace));
+            if (!patchOverlayLast(type, ov, val, bars, i, lightOnly, closes)) delete s.memo[key];
+          } else {
+            const brace = key.indexOf("{");
+            if (brace < 0) continue;
+            const id = key.slice(0, brace);
+            const p = JSON.parse(key.slice(brace));
+            if (!patchSubLast(id, p, val, bars, i, lightOnly, vols)) delete s.memo[key];
+          }
+        } catch (_) { delete s.memo[key]; }
       }
     }
     function applyTick(tick) {
@@ -1419,9 +1591,10 @@
       if (tick.append) {
         const bar = tick.bar || { t: tick.t != null ? tick.t : (period === "T" ? (typeof last.t === "number" ? last.t + 1 : last.t) : last.t), o: px, h: px, l: px, c: px, v: tick.volume || 0 };
         bars.push(bar);
-        // 新 K 棒可能改變可視右緣；視窗跟到手尾
         const v = view();
         if (v.right >= bars.length - 3) v.right = bars.length - 1 + (period === "T" ? 0 : 2);
+        // 新棒：陣列長度變了，舊 memo 長度不齊 → 全量重建
+        invalidateSeriesMemo();
       } else {
         last.c = px;
         if (Number.isFinite(tick.high)) last.h = Math.max(last.h, tick.high); else last.h = Math.max(last.h, px);
@@ -1429,10 +1602,8 @@
         if (Number.isFinite(tick.open)) last.o = tick.open;
         if (Number.isFinite(tick.volume)) last.v = tick.volume;
         else if (Number.isFinite(tick.volumeDelta)) last.v = (last.v || 0) + tick.volumeDelta;
+        patchIndicatorsOnTick({ lightOnly: !!(tick.lightOnly || interactionBusy) });
       }
-      invalidateSeriesMemo();
-      // 畫線錨在 bar index／價格；尺度若變 layoutFingerprint 會自動重建畫線層。
-      // 預設 rAF 合併；量測迴圈可傳 { sync:true } 立刻 render。
       if (tick && tick.sync) render();
       else requestRender();
       return true;
@@ -1444,8 +1615,79 @@
       markDrawingsDirty(); sync(); render();
       return 0;
     }
-    function __perfAddN(n, type) {
+    /** 最重 UI：20 主圖疊加 + 全部副圖 + 左右分欄 + 大量畫線。回傳實際配置。 */
+    function __perfSetupStress(opts) {
+      opts = opts || {};
+      if (!quote || !entry) throw new Error("chart not ready");
+      const drawN = opts.drawings != null ? opts.drawings : 1000;
+      // 20 overlays：塞滿 MA/EMA/BB/SAR
+      const ovs = [];
+      for (const p of [5, 10, 15, 20, 25, 30, 40, 50, 60, 120]) ovs.push({ type: "ma", period: p });
+      for (const p of [8, 12, 21, 26, 55]) ovs.push({ type: "ema", period: p });
+      ovs.push({ type: "bb", n: 20, k: 2 }, { type: "bb", n: 50, k: 2.5 });
+      ovs.push({ type: "sar", step: 0.02, max: 0.2 }, { type: "sar", step: 0.04, max: 0.3 });
+      // 再補 MA 到剛好 20
+      let p = 7;
+      while (ovs.length < MAX_OVERLAYS) { ovs.push({ type: "ma", period: p }); p += 3; }
+      entry.overlays = ovs.slice(0, MAX_OVERLAYS);
+      // 全部副圖指標打開（目前 8 種：vol/kd/macd/rsi/wr/dmi/atr/obv）
+      const c = cfg();
+      for (const id of SUB_ORDER) {
+        if (!c[id]) c[id] = { on: true };
+        c[id].on = true;
+      }
+      if (c.volma) c.volma.on = true;
+      // 左右各 5（實際 pane 數 = min(left+right, enabled)；enabled=8 → 5+3）
+      store.ui.subLayout = { left: 5, right: 5 };
+      ensureSubLayout();
+      // 畫線：混合工具，偏重 fib/channel/text + 大量 trend
+      drawings().length = 0; selected = -1; pending = null; drag = null;
+      const mixPlan = [
+        ["trend", Math.floor(drawN * 0.40)],
+        ["ray", Math.floor(drawN * 0.08)],
+        ["hline", Math.floor(drawN * 0.08)],
+        ["vline", Math.floor(drawN * 0.08)],
+        ["channel", Math.floor(drawN * 0.12)],
+        ["fib", Math.floor(drawN * 0.12)],
+        ["rect", Math.floor(drawN * 0.06)],
+        ["text", Math.floor(drawN * 0.06)],
+      ];
+      let placed = 0;
+      for (const [t, n] of mixPlan) { __perfAddN(n, t, { defer: true }); placed += n; }
+      if (placed < drawN) __perfAddN(drawN - placed, "trend", { defer: true });
+      markDrawingsDirty();
+      invalidateSeriesMemo();
+      sync(); render();
+      const enabledSubs = SUB_ORDER.filter(id => c[id] && c[id].on);
+      const sl = ensureSubLayout();
+      return {
+        overlays: entry.overlays.length,
+        overlayTypes: entry.overlays.reduce((m, o) => ((m[o.type] = (m[o.type] || 0) + 1), m), {}),
+        subsEnabled: enabledSubs.length,
+        subIds: enabledSubs,
+        subLayout: { ...sl },
+        panesExpected: 1 + Math.min(sl.left + sl.right, enabledSubs.length),
+        drawings: drawings().length,
+        period,
+        symbol: quote.symbol,
+      };
+    }
+    function __perfSetupLight() {
+      if (!quote || !entry) throw new Error("chart not ready");
+      entry.overlays = [
+        { type: "ma", period: 5 }, { type: "ma", period: 20 }, { type: "ma", period: 60 },
+      ];
+      const c = cfg();
+      for (const id of SUB_ORDER) { if (c[id]) c[id].on = (id === "vol"); }
+      if (c.volma) c.volma.on = true;
+      store.ui.subLayout = { left: 1, right: 0 };
+      drawings().length = 0; selected = -1; pending = null; drag = null;
+      markDrawingsDirty(); invalidateSeriesMemo(); sync(); render();
+      return { overlays: 3, subsEnabled: 1, drawings: 0, subLayout: ensureSubLayout() };
+    }
+    function __perfAddN(n, type, opts) {
       type = type || "trend";
+      opts = opts || {};
       if (!quote || !entry) throw new Error("chart not ready");
       const { bars } = series();
       const nBars = bars.length;
@@ -1464,7 +1706,8 @@
         else if (type === "ray") list.push({ type: "ray", pts: [{ i, p: p0 }, { i: j, p: p1 }] });
         else list.push({ type: "trend", pts: [{ i, p: p0 }, { i: j, p: p1 }] });
       }
-      selected = -1; markDrawingsDirty(); sync(); render();
+      selected = -1; markDrawingsDirty();
+      if (!opts.defer) { sync(); render(); }
       return list.length;
     }
     function __perfMeasure(opts) {
@@ -1472,11 +1715,29 @@
       const frames = opts.frames || 30;
       const withHit = !!opts.hitTest;
       const crosshairOnly = !!opts.crosshairOnly;
+      const withTick = !!opts.withTick;
+      const withPan = !!opts.withPan;
       const times = [];
       render(); // warm + build caches
+      const baseRight = view().right;
       for (let i = 0; i < frames; i++) {
-        if (crosshairOnly) {
+        if (crosshairOnly || withPan) {
           mouse = { x: 80 + (i * 17) % Math.max(40, cssW - 160), y: Math.min(cssH * 0.35, 140) };
+        }
+        if (withPan) {
+          view().right = baseRight + Math.sin(i / 5) * 8;
+        }
+        if (withTick && quote && entry) {
+          const bars = series().bars; const last = bars[bars.length - 1];
+          const wobble = Math.sin(i / 7) * 0.35;
+          // sync:false — 下面統一 render，避免雙重重繪
+          last.c = last.c + wobble;
+          last.h = Math.max(last.h, last.c);
+          last.l = Math.min(last.l, last.c);
+          last.v = (last.v || 0) + 1;
+          quote.price = last.c;
+          interactionBusy = !!withPan;
+          patchIndicatorsOnTick({ lightOnly: !!withPan });
         }
         const t0 = performance.now();
         render();
@@ -1485,6 +1746,7 @@
         }
         times.push(performance.now() - t0);
       }
+      if (withPan) view().right = baseRight;
       times.sort((a, b) => a - b);
       const sum = times.reduce((a, b) => a + b, 0);
       const avg = sum / times.length;
@@ -1492,6 +1754,7 @@
       const p95 = times[Math.floor(times.length * 0.95)];
       return {
         count: drawings().length,
+        overlays: entry && entry.overlays ? entry.overlays.length : 0,
         frames,
         avgMs: +avg.toFixed(3),
         p50Ms: +p50.toFixed(3),
@@ -1502,30 +1765,49 @@
         cssW, cssH,
         dpr: window.devicePixelRatio || 1,
         canvasW: canvas.width, canvasH: canvas.height,
-        isWebGL: false, contextType: "2d", withHit, crosshairOnly,
+        isWebGL: false, contextType: "2d", withHit, crosshairOnly, withTick, withPan,
         drawLayerDirty, spatialBuckets: spatial.buckets ? spatial.buckets.length : 0,
       };
     }
-    async function __perfContinuous(ms) {
+    async function __perfContinuous(ms, opts) {
+      opts = opts || {};
       ms = ms || 1500;
-      let frames = 0;
+      const interact = opts.interact || null; // null | "mousemove" | "pan"
+      let frames = 0, ticks = 0;
       const t0 = performance.now();
+      const baseRight = view().right;
       await new Promise(resolve => {
         function tick() {
-          // 模擬高頻行情：每幀更新最後收盤，同步重繪（量測用）
           if (quote && entry) {
             const bars = series().bars; const last = bars[bars.length - 1];
             const wobble = Math.sin(frames / 7) * 0.15;
-            applyTick({ price: last.c + wobble, volumeDelta: 1, sync: true });
-          } else render();
+            applyTick({ price: last.c + wobble, volumeDelta: 1, sync: false });
+            ticks++;
+          }
+          if (interact === "mousemove" || interact === "pan") {
+            mouse = { x: 80 + (frames * 13) % Math.max(40, cssW - 160), y: 40 + (frames * 7) % Math.max(40, cssH * 0.5) };
+          }
+          interactionBusy = (interact === "pan");
+          if (interact === "pan") {
+            view().right = baseRight + Math.sin(frames / 6) * 12;
+          }
+          render();
           frames++;
           if (performance.now() - t0 >= ms) resolve();
           else requestAnimationFrame(tick);
         }
         requestAnimationFrame(tick);
       });
+      if (interact === "pan") view().right = baseRight;
+      interactionBusy = false;
       const elapsed = performance.now() - t0;
-      return { frames, elapsedMs: +elapsed.toFixed(1), fps: +(frames * 1000 / elapsed).toFixed(1), count: drawings().length };
+      return {
+        frames, ticks, elapsedMs: +elapsed.toFixed(1),
+        fps: +(frames * 1000 / elapsed).toFixed(1),
+        tickHz: +(ticks * 1000 / elapsed).toFixed(1),
+        interact, count: drawings().length,
+        overlays: entry && entry.overlays ? entry.overlays.length : 0,
+      };
     }
 
     return {
@@ -1550,7 +1832,17 @@
       resize,
       render,
       requestRender,
-      __perf: { clear: __perfClear, addN: __perfAddN, measure: __perfMeasure, continuous: __perfContinuous, count: () => (entry ? drawings().length : 0) },
+      __perf: {
+        clear: __perfClear, addN: __perfAddN, setupStress: __perfSetupStress, setupLight: __perfSetupLight,
+        measure: __perfMeasure, continuous: __perfContinuous,
+        count: () => (entry ? drawings().length : 0),
+        snapshot: () => entry ? {
+          overlays: (entry.overlays || []).length,
+          drawings: drawings().length,
+          subs: SUB_ORDER.filter(id => cfg()[id] && cfg()[id].on),
+          subLayout: ensureSubLayout(),
+        } : null,
+      },
     };
   }
 

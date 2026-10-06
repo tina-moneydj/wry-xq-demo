@@ -5,6 +5,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::Deserialize;
 use tao::{
@@ -44,6 +45,8 @@ enum UserEvent {
     Ipc(IpcMessage),
     Navigate(String),
     ChildLoaded(String),
+    /// 約每秒一次的程序記憶體取樣（含 WebView 子行程），給狀態列用。
+    MemStats { rss_mb: f64, rss_max_mb: f64, cpu_pct: f64 },
 }
 
 fn main() -> wry::Result<()> {
@@ -127,6 +130,29 @@ fn main() -> wry::Result<()> {
             }),
     )?;
 
+    // 記憶體狀態列：背景執行緒每 1 秒取樣 RSS（含 WebKit 子行程），不走行情 tick 路徑。
+    let mem_proxy = proxy.clone();
+    let self_pid = std::process::id();
+    std::thread::spawn(move || {
+        let mut rss_max = 0.0_f64;
+        let mut last_cpu = read_proc_times(self_pid);
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let rss = rss_mb_tree(self_pid);
+            if rss > rss_max {
+                rss_max = rss;
+            }
+            let now = read_proc_times(self_pid);
+            let cpu = cpu_pct(last_cpu, now);
+            last_cpu = now;
+            let _ = mem_proxy.send_event(UserEvent::MemStats {
+                rss_mb: rss,
+                rss_max_mb: rss_max,
+                cpu_pct: cpu,
+            });
+        }
+    });
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
@@ -176,7 +202,14 @@ fn main() -> wry::Result<()> {
                 let json = serde_json::to_string(&url).unwrap_or_else(|_| "\"\"".into());
                 let _ = main_view.evaluate_script(&format!("window.setWebUrl && window.setWebUrl({json});"));
             }
-            _ => {}
+                        Event::UserEvent(UserEvent::MemStats { rss_mb, rss_max_mb, cpu_pct }) => {
+                let script = format!(
+                    "(function(){{var js=null;try{{if(performance&&performance.memory&&performance.memory.usedJSHeapSize)js=performance.memory.usedJSHeapSize/(1024*1024);}}catch(e){{}}if(window.setMemStats)window.setMemStats({{rssMb:{rss:.1},rssMaxMb:{mx:.1},cpuPct:{cpu:.1},jsHeapMb:js}});}})();",
+                    rss = rss_mb, mx = rss_max_mb, cpu = cpu_pct,
+                );
+                let _ = main_view.evaluate_script(&script);
+            }
+_ => {}
         }
     });
 }
@@ -218,4 +251,84 @@ fn save_state(path: &std::path::Path, data: &serde_json::Value) -> std::io::Resu
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(data)?)?;
     std::fs::rename(&tmp, path)
+}
+
+
+/// 主行程 + 子孫 + WebKit/WebView2 相關子行程的 VmRSS 加總（MB）。
+fn rss_mb_tree(pid: u32) -> f64 {
+    let mut total_kb = 0u64;
+    let mut stack = vec![pid];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(p) { continue; }
+        if let Ok(status) = std::fs::read_to_string(format!("/proc/{p}/status")) {
+            if let Some(line) = status.lines().find(|l| l.starts_with("VmRSS:")) {
+                if let Some(kb) = line.split_whitespace().nth(1) {
+                    total_kb += kb.parse::<u64>().unwrap_or(0);
+                }
+            }
+        }
+        if let Ok(children) = std::fs::read_to_string(format!("/proc/{p}/task/{p}/children")) {
+            for c in children.split_whitespace() {
+                if let Ok(cp) = c.parse::<u32>() { stack.push(cp); }
+            }
+        }
+    }
+    if let Ok(rd) = std::fs::read_dir("/proc") {
+        for ent in rd.flatten() {
+            let Ok(p) = ent.file_name().to_string_lossy().parse::<u32>() else { continue };
+            if seen.contains(&p) { continue; }
+            let cmdline = std::fs::read(format!("/proc/{p}/cmdline")).unwrap_or_default();
+            let cmd = String::from_utf8_lossy(&cmdline);
+            if !(cmd.contains("WebKitWebProcess") || cmd.contains("WebKitNetworkProcess")
+                || cmd.contains("WebKit.WebProcess") || cmd.contains("WebKit.NetworkProcess")
+                || cmd.contains("msedgewebview2") || cmd.contains("EmbeddedBrowserWebView")) {
+                continue;
+            }
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{p}/stat")) else { continue };
+            let Some(rest) = stat.rsplit(')').next() else { continue };
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() < 2 { continue; }
+            let Ok(ppid) = parts[1].parse::<u32>() else { continue };
+            if ppid == pid || seen.contains(&ppid) {
+                if let Ok(status) = std::fs::read_to_string(format!("/proc/{p}/status")) {
+                    if let Some(line) = status.lines().find(|l| l.starts_with("VmRSS:")) {
+                        if let Some(kb) = line.split_whitespace().nth(1) {
+                            total_kb += kb.parse::<u64>().unwrap_or(0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    total_kb as f64 / 1024.0
+}
+
+fn read_proc_times(pid: u32) -> (u64, u64) {
+    let mut proc_t = 0u64;
+    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        if let Some(rest) = stat.rsplit(')').next() {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() > 14 {
+                proc_t = parts[12].parse().unwrap_or(0) + parts[13].parse().unwrap_or(0);
+            }
+        }
+    }
+    let mut total = 0u64;
+    if let Ok(stat) = std::fs::read_to_string("/proc/stat") {
+        if let Some(line) = stat.lines().next() {
+            for n in line.split_whitespace().skip(1) {
+                total += n.parse::<u64>().unwrap_or(0);
+            }
+        }
+    }
+    (proc_t, total)
+}
+
+fn cpu_pct(prev: (u64, u64), now: (u64, u64)) -> f64 {
+    let dp = now.0.saturating_sub(prev.0) as f64;
+    let dt = now.1.saturating_sub(prev.1) as f64;
+    if dt <= 0.0 { return 0.0; }
+    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
+    (dp / dt) * cpus * 100.0
 }

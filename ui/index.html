@@ -119,6 +119,17 @@
   .watch-toolbar { flex: none; display: flex; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
   .watch-toolbar input { flex: 1; background: #111; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 3px 6px; font: inherit; }
   .watch-toolbar button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 3px; font: inherit; padding: 2px 8px; cursor: pointer; }
+
+  #status-bar {
+    flex: none; height: 22px; display: flex; align-items: center; gap: 12px;
+    padding: 0 10px; background: #1a1a1a; border-top: 1px solid var(--line);
+    color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums;
+  }
+  #status-bar .mem-ok { color: #98c379; }
+  #status-bar .mem-warn { color: #e5c07b; }
+  #status-bar .mem-high { color: #e5484d; }
+  #status-bar b { color: #cfcfcf; font-weight: 600; }
+
 </style>
 </head>
 <body>
@@ -176,6 +187,14 @@
       <div id="web-slot"><div class="hint">網頁載入中…</div></div>
     </section>
   </section>
+  <div id="status-bar" title="記憶體／FPS 約每秒更新；不走行情 tick 熱路徑">
+    <span>記憶體 <b id="mem-rss">—</b></span>
+    <span>JS 堆 <b id="mem-js">—</b></span>
+    <span>FPS <b id="ui-fps">—</b></span>
+    <span id="mem-detail" style="opacity:.75"></span>
+    <span style="flex:1"></span>
+    <span id="mem-hint">取樣中…</span>
+  </div>
 </div>
 
 <script>
@@ -674,6 +693,55 @@
   applyLayout();
   window.addEventListener("load", applyLayout);
   setTimeout(() => { renderTabbar("top"); renderTabbar("left"); renderTabbar("right"); applyLayout(); }, 50);
+  window.setMemStats = function (info) {
+    try {
+      const rssEl = document.getElementById("mem-rss");
+      const jsEl = document.getElementById("mem-js");
+      const detail = document.getElementById("mem-detail");
+      const hint = document.getElementById("mem-hint");
+      if (!rssEl) return;
+      const rss = info && Number(info.rssMb);
+      if (Number.isFinite(rss)) {
+        rssEl.textContent = rss.toFixed(0) + " MB";
+        rssEl.className = rss >= 1200 ? "mem-high" : rss >= 800 ? "mem-warn" : "mem-ok";
+      }
+      let jsMb = (info && Number.isFinite(info.jsHeapMb)) ? info.jsHeapMb : null;
+      if (jsMb == null && performance && performance.memory && performance.memory.usedJSHeapSize) {
+        jsMb = performance.memory.usedJSHeapSize / (1024 * 1024);
+      }
+      if (jsEl) jsEl.textContent = jsMb != null ? jsMb.toFixed(0) + " MB" : "n/a";
+      if (detail) {
+        const parts = [];
+        if (info && Number.isFinite(info.rssMaxMb)) parts.push("峰值 " + Number(info.rssMaxMb).toFixed(0) + " MB");
+        if (info && Number.isFinite(info.cpuPct)) parts.push("CPU " + Number(info.cpuPct).toFixed(0) + "%");
+        detail.textContent = parts.join(" · ");
+      }
+      if (hint) hint.textContent = "每秒更新";
+    } catch (_) {}
+  };
+
+  // 即時 FPS：獨立 rAF 計幀，畫面每秒刷新一次（不綁行情 tick）
+  (function () {
+    let frames = 0;
+    let last = performance.now();
+    function beat(now) {
+      frames++;
+      requestAnimationFrame(beat);
+    }
+    requestAnimationFrame(beat);
+    setInterval(() => {
+      const el = document.getElementById("ui-fps");
+      if (!el) return;
+      const now = performance.now();
+      const dt = Math.max(1, now - last);
+      const fps = (frames * 1000) / dt;
+      frames = 0;
+      last = now;
+      el.textContent = fps.toFixed(0);
+      el.className = fps >= 50 ? "mem-ok" : fps >= 30 ? "mem-warn" : "mem-high";
+    }, 1000);
+  })();
+
 })();
 </script>
 </body>
