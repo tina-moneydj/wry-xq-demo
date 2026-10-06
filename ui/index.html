@@ -7,13 +7,43 @@
   :root {
     --bg: #111; --pane: #161616; --line: #333; --text: #e6e6e6; --dim: #8a8a8a;
     --up: #e5484d; --down: #30a46c; --sel: #243044; --split: #2a2a2a; --split-hot: #3b82f6;
+    --tab: #1a1a1a; --tab-active: #2a2a2a; --tab-hover: #222;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
     font: 13px/1.4 "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif; user-select: none; }
   #app { display: flex; flex-direction: column; height: 100vh; }
-  .title { height: 28px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 10px;
-    background: #1d1d1d; border-bottom: 1px solid var(--line); color: var(--dim); white-space: nowrap; overflow: hidden; }
+  /* ---- 分頁列（XQ 風格）---- */
+  .tabbar { flex: none; display: flex; align-items: stretch; height: 26px; min-height: 26px; background: #161616;
+    border-bottom: none; overflow: hidden; z-index: 5; position: relative; }
+  .tabbar-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+  .tabbar-tabs::-webkit-scrollbar { height: 0; }
+  .tab { display: flex; align-items: center; gap: 4px; padding: 0 8px 0 10px; max-width: 150px;
+    background: var(--tab); border-right: 1px solid #252525; color: var(--dim); cursor: pointer;
+    font-size: 12px; white-space: nowrap; flex: none; }
+  .tab:hover { background: var(--tab-hover); color: #ccc; }
+  .tab.active { background: var(--tab-active); color: var(--text); box-shadow: inset 0 -2px 0 var(--split-hot); }
+  .tab .tlabel { overflow: hidden; text-overflow: ellipsis; }
+  .tab .tclose { flex: none; width: 14px; height: 14px; line-height: 12px; text-align: center;
+    border-radius: 2px; opacity: 0; font-size: 11px; color: #aaa; }
+  .tab:hover .tclose, .tab.active .tclose { opacity: 0.85; }
+  .tab .tclose:hover { background: #444; color: #fff; opacity: 1; }
+  .tab-add { flex: none; min-width: 28px; height: 100%; padding: 0 10px; background: #1a1a1a; border: none; color: #cfcfcf;
+    cursor: pointer; font-size: 18px; line-height: 1; border-left: 1px solid #2a2a2a; }
+  .tab-add:hover { color: #fff; background: #2a2a2a; }
+  .tab-menu { position: absolute; z-index: 60; background: #1d1d1d; border: 1px solid #444;
+    border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,0.5); padding: 4px; min-width: 140px; font-size: 12px; }
+  .tab-menu[hidden] { display: none; }
+  .tab-menu button { display: block; width: 100%; text-align: left; background: transparent; color: #ddd;
+    border: none; padding: 5px 10px; cursor: pointer; font: inherit; border-radius: 2px; }
+  .tab-menu button:hover { background: #2a2a2a; }
+  .tab-menu .sep { height: 1px; background: #333; margin: 4px 2px; }
+  .title { height: 30px !important; flex: 0 0 30px !important; display: flex !important; align-items: center; gap: 4px; padding: 0 6px 0 0;
+    background: #1d1d1d !important; border-bottom: 1px solid var(--line); color: var(--dim); white-space: nowrap; overflow: hidden; }
+  .title-tabs { padding-right: 4px; }
+  .title-tabs .tabbar { flex: 1; min-width: 0; height: 28px !important; min-height: 28px !important; background: transparent; border-bottom: none; }
+  .chart-title-inline, .web-url-inline { font-size: 12px; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+  .demo-tag { font-size: 11px; padding-right: 6px; }
   .title b { color: var(--text); font-weight: 600; }
   .title .grow { flex: 1; }
   .title button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 3px;
@@ -21,7 +51,6 @@
   .title button:hover { background: #363636; }
   #top { flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--pane); position: relative; }
   #chart-wrap { flex: 1; position: relative; min-height: 0; }
-  /* 工具列：空間不夠時自動換行，不會被截掉 */
   .toolbar { min-height: 28px; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; padding: 3px 8px;
     background: #191919; border-bottom: 1px solid var(--line); white-space: nowrap; }
   .tb-group { display: flex; gap: 2px; padding-right: 8px; border-right: 1px solid #2c2c2c; }
@@ -31,13 +60,12 @@
   .toolbar button:hover:not(:disabled), .tb-menu button:hover { background: #2f2f2f; }
   .toolbar button.on, .tb-menu button.on { background: #1f3a66; border-color: #3b82f6; color: #fff; }
   .toolbar button:disabled { opacity: 0.4; cursor: default; }
-  /* 下拉選單（指標、畫線）：最高只到走勢圖格底部，避免被右下的網頁蓋住 */
   .tb-menu { position: absolute; z-index: 50; background: #1d1d1d; border: 1px solid #444; border-radius: 4px;
     box-shadow: 0 6px 18px rgba(0,0,0,0.5); padding: 6px; overflow-y: auto; font-size: 12px; }
   .tb-menu[hidden] { display: none; }
   .draw-menu { display: flex; flex-direction: column; gap: 2px; min-width: 130px; }
   .draw-menu .menu-item { text-align: left; }
-  .ind-menu { width: 400px; }
+  .ind-menu { width: 440px; }
   .ind-menu .menu-item { margin-top: 6px; }
   .menu-title { color: var(--dim); margin: 4px 2px 3px; border-bottom: 1px solid #333; padding-bottom: 2px; }
   .ind-row { display: flex; align-items: center; gap: 5px; padding: 2px; white-space: nowrap; }
@@ -45,26 +73,25 @@
   .ind-name { width: 130px; color: #ddd; cursor: pointer; display: flex; align-items: center; gap: 4px; }
   .ind-pl { color: var(--dim); }
   .ind-row input[type=number] { width: 52px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 3px; font: inherit; padding: 1px 3px; }
-  input { user-select: text; }
+  input, textarea { user-select: text; }
   .chart-text-input { position: absolute; z-index: 20; width: 220px; height: 26px; background: #111; color: #ffb000;
     border: 1px solid #ffb000; border-radius: 3px; font: 13px sans-serif; padding: 2px 6px; outline: none; }
   .chart-text-input[hidden] { display: none; }
-  #chart { cursor: crosshair; }
-  #chart { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #chart { cursor: crosshair; position: absolute; inset: 0; width: 100%; height: 100%; }
   #bottom { flex: 1; display: flex; min-height: 0; }
-  #left { flex: none; display: flex; flex-direction: column; min-width: 0; background: var(--pane); }
-  #right { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #101010; }
+  #left { flex: none; display: flex; flex-direction: column; min-width: 0; background: var(--pane); position: relative; }
+  #right { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #101010; position: relative; }
   #web-slot { flex: 1; position: relative; min-height: 0; }
   #web-slot .hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); }
+  .pane-body { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .pane-body[hidden] { display: none !important; }
   .splitter { flex: none; position: relative; z-index: 5; background: var(--split); touch-action: none; }
   .splitter:hover, .splitter.dragging { background: var(--split-hot); }
-  /* 看得到的線 6px，但可以按的範圍上下/左右各多 4px，比較好抓 */
   .splitter::before { content: ""; position: absolute; }
   #hsplit { height: 6px; cursor: row-resize; }
   #hsplit::before { left: 0; right: 0; top: -4px; bottom: -4px; }
   #vsplit { width: 6px; cursor: col-resize; }
   #vsplit::before { top: 0; bottom: 0; left: -4px; right: -4px; }
-  /* 拖拉時蓋在整個畫面最上層的透明層：滑鼠不管移到哪裡，事件都由它接 */
   #drag-overlay { position: fixed; inset: 0; z-index: 2147483647; display: none; background: transparent; }
   #drag-overlay.on { display: block; }
   table { width: 100%; border-collapse: collapse; }
@@ -75,39 +102,70 @@
   tbody tr:hover { background: #222; }
   tbody tr.sel { background: var(--sel); }
   .up { color: var(--up); } .down { color: var(--down); }
-  #quotes { flex: 1; overflow: auto; }
+  #quotes, #watch { flex: 1; overflow: auto; }
   .note { flex: none; padding: 6px 10px; color: var(--dim); border-top: 1px solid var(--line); font-size: 12px; }
+  #note-editor { flex: 1; width: 100%; resize: none; background: #121212; color: var(--text);
+    border: none; padding: 10px; font: inherit; outline: none; }
+  .watch-toolbar { flex: none; display: flex; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .watch-toolbar input { flex: 1; background: #111; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 3px 6px; font: inherit; }
+  .watch-toolbar button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 3px; font: inherit; padding: 2px 8px; cursor: pointer; }
 </style>
 </head>
 <body>
 <div id="app">
   <section id="top">
-    <div class="title"><b>走勢圖</b><span id="chart-title"></span><span class="grow"></span><span>示範資料（假的）</span></div>
+    <div class="title title-tabs">
+      <div class="tabbar" id="tabbar-top" data-pane="top"></div>
+      <span id="chart-title" class="chart-title-inline"></span>
+      <span class="grow"></span>
+      <span class="demo-tag">示範資料（假的）</span>
+    </div>
     <div id="chart-toolbar" class="toolbar"></div>
     <div id="chart-wrap"><canvas id="chart"></canvas></div>
   </section>
   <div id="hsplit" class="splitter"></div>
   <section id="bottom">
     <section id="left">
-      <div class="title"><b>報價</b><span class="grow"></span><span>點一檔看走勢與網頁</span></div>
-      <div id="quotes">
-        <table>
-          <thead><tr><th>代號</th><th>名稱</th><th>成交</th><th>漲跌</th><th>漲幅</th></tr></thead>
-          <tbody id="quote-rows"></tbody>
-        </table>
+      <div class="title title-tabs"><div class="tabbar" id="tabbar-left" data-pane="left"></div></div>
+      <div class="pane-body" id="body-quotes">
+        <div id="quotes">
+          <table>
+            <thead><tr><th>代號</th><th>名稱</th><th>成交</th><th>漲跌</th><th>漲幅</th></tr></thead>
+            <tbody id="quote-rows"></tbody>
+          </table>
+        </div>
+        <div class="note">以上報價全部是假的示範資料，不是即時行情。</div>
       </div>
-      <div class="note">以上報價全部是假的示範資料，不是即時行情。</div>
+      <div class="pane-body" id="body-watch" hidden>
+        <div class="watch-toolbar">
+          <input id="watch-input" placeholder="輸入代號加入自選" maxlength="6">
+          <button id="watch-add" type="button">加入</button>
+        </div>
+        <div id="watch">
+          <table>
+            <thead><tr><th>代號</th><th>名稱</th><th>成交</th><th></th></tr></thead>
+            <tbody id="watch-rows"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="pane-body" id="body-note" hidden>
+        <textarea id="note-editor" placeholder="記事（自動儲存）…"></textarea>
+      </div>
     </section>
     <div id="vsplit" class="splitter"></div>
     <section id="right">
-      <div class="title"><b>網頁</b><span id="web-url">載入中…</span><span class="grow"></span><button id="home">首頁</button></div>
+      <div class="title title-tabs">
+        <div class="tabbar" id="tabbar-right" data-pane="right"></div>
+        <span id="web-url" class="web-url-inline">載入中…</span>
+        <span class="grow"></span>
+        <button id="home" type="button">首頁</button>
+      </div>
       <div id="web-slot"><div class="hint">網頁載入中…</div></div>
     </section>
   </section>
 </div>
 
 <script>
-  // 除錯：XQ_DEBUG=1 時把 JS 錯誤送到 Rust 的 stderr。
   window.addEventListener("error", e => {
     if (window.XQ_DEBUG && window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg: `JS error: ${e.message} (line ${e.lineno})` }));
   });
@@ -115,16 +173,87 @@
 <script>/*__CHART_JS__*/</script>
 <script>
 (() => {
-  // ---- 假的示範資料 ----
+  const HOME_URL = "https://www.twse.com.tw/zh/";
   const QUOTES = [
     { symbol: "2330", name: "台積電",   price: 1035.0, change: +12.0 },
     { symbol: "2317", name: "鴻海",     price: 198.5,  change: -1.5 },
     { symbol: "2454", name: "聯發科",   price: 1280.0, change: +8.0 },
     { symbol: "0050", name: "元大台灣50", price: 186.2,  change: +0.4 },
   ];
-  let selected = 0;
+  const quoteBy = s => QUOTES.find(q => q.symbol === s) || QUOTES[0];
+  const uid = (p) => p + "-" + Math.random().toString(36).slice(2, 8);
+
+  // ---- 持久化（與 chart.js 共用 window.XQ_STATE / store）----
+  const store = window.XQ_STATE && typeof window.XQ_STATE === "object" ? window.XQ_STATE : (window.XQ_STATE = {});
+  store.v = Math.max(2, store.v || 0);
+  store.keys = store.keys && typeof store.keys === "object" ? store.keys : {};
+  store.ui = store.ui && typeof store.ui === "object" ? store.ui : {};
+  if (!store.panes || typeof store.panes !== "object") store.panes = {};
+  if (!Array.isArray(store.watchlist)) store.watchlist = ["2330", "2317"];
+  let saveTimer = 0;
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => send({ type: "save", data: store }), 300);
+  }
+
+  function defaultPanes() {
+    const q0 = QUOTES[0];
+    return {
+      top: {
+        active: "chart-1",
+        tabs: [{ id: "chart-1", kind: "chart", title: `${q0.symbol} ${q0.name}`, symbol: q0.symbol, period: store.ui.period || "D" }],
+      },
+      left: {
+        active: "quotes-1",
+        tabs: [{ id: "quotes-1", kind: "quotes", title: "報價" }],
+      },
+      right: {
+        active: "web-1",
+        tabs: [{ id: "web-1", kind: "web", title: "證交所", url: HOME_URL }],
+      },
+    };
+  }
+  function ensurePanes() {
+    const d = defaultPanes();
+    for (const pane of ["top", "left", "right"]) {
+      const p = store.panes[pane];
+      if (!p || !Array.isArray(p.tabs) || !p.tabs.length) store.panes[pane] = d[pane];
+      else {
+        p.tabs = p.tabs.filter(t => t && t.id && t.kind);
+        if (!p.tabs.length) store.panes[pane] = d[pane];
+        else if (!p.tabs.some(t => t.id === p.active)) p.active = p.tabs[0].id;
+      }
+    }
+  }
+  ensurePanes();
+
+  function send(msg) {
+    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(JSON.stringify(msg));
+    else console.log("ipc", msg);
+  }
+  function log(text) {
+    if (window.XQ_DEBUG) send({ type: "log", msg: String(text) });
+  }
+
+  // ---- 走勢圖 ----
+  const chart = XQChart.create(document.getElementById("chart"), document.getElementById("chart-toolbar"));
+  chart.onMeta(meta => {
+    const tab = store.panes.top.tabs.find(t => t.id === meta.tabId);
+    if (tab && meta.period) { tab.period = meta.period; save(); renderTabbar("top"); }
+  });
+
+  function applyChartTab(tab) {
+    if (!tab) return;
+    const q = quoteBy(tab.symbol);
+    chart.setContext({ tabId: tab.id, quote: q, period: tab.period || "D" });
+    const up = q.change >= 0;
+    document.getElementById("chart-title").innerHTML =
+      `${q.symbol} ${q.name}　<span class="${up ? "up" : "down"}">${q.price.toFixed(2)}　${up ? "+" : ""}${q.change.toFixed(2)}</span>`;
+    chart.resize();
+  }
 
   // ---- 報價表 ----
+  let selectedQuote = 0;
   const rows = document.getElementById("quote-rows");
   function renderQuotes() {
     rows.innerHTML = "";
@@ -133,42 +262,283 @@
       const sign = q.change >= 0 ? "+" : "";
       const pct = (q.change / (q.price - q.change)) * 100;
       const tr = document.createElement("tr");
-      if (i === selected) tr.className = "sel";
+      if (i === selectedQuote) tr.className = "sel";
       tr.innerHTML = `<td>${q.symbol}</td><td>${q.name}</td><td class="${cls}">${q.price.toFixed(2)}</td>` +
         `<td class="${cls}">${sign}${q.change.toFixed(2)}</td><td class="${cls}">${sign}${pct.toFixed(2)}%</td>`;
       tr.addEventListener("click", () => selectQuote(i));
       rows.appendChild(tr);
     });
   }
-
-  function selectQuote(i) {
-    selected = i;
+  function selectQuote(i, opts) {
+    selectedQuote = i;
     renderQuotes();
-    drawChart();
-    send({ type: "quote", symbol: QUOTES[i].symbol });
+    const q = QUOTES[i];
+    // 更新目前走勢圖分頁的代號
+    const ctab = store.panes.top.tabs.find(t => t.id === store.panes.top.active);
+    if (ctab) {
+      ctab.symbol = q.symbol;
+      ctab.title = `${q.symbol} ${q.name}`;
+      applyChartTab(ctab);
+      renderTabbar("top");
+    }
+    // 更新目前網頁分頁網址並載入
+    if (!opts || opts.navigate !== false) {
+      const wtab = store.panes.right.tabs.find(t => t.id === store.panes.right.active);
+      if (wtab && wtab.kind === "web") {
+        wtab.url = `https://tw.stock.yahoo.com/quote/${q.symbol}.TW`;
+        wtab.title = q.symbol;
+        renderTabbar("right");
+        send({ type: "open", url: wtab.url });
+        setWebUrlDisplay(wtab.url);
+      }
+    }
+    save();
   }
 
-  // ---- 走勢圖（技術分析，程式在 chart.js）----
-  const chart = XQChart.create(document.getElementById("chart"), document.getElementById("chart-toolbar"));
-  function drawChart() {
-    const q = QUOTES[selected];
-    const up = q.change >= 0;
-    document.getElementById("chart-title").innerHTML =
-      `${q.symbol} ${q.name}　<span class="${up ? "up" : "down"}">${q.price.toFixed(2)}　${up ? "+" : ""}${q.change.toFixed(2)}</span>`;
-    chart.setQuote(q);
-    chart.resize();
+  // ---- 自選 ----
+  function renderWatch() {
+    const tb = document.getElementById("watch-rows");
+    tb.innerHTML = "";
+    store.watchlist.forEach((sym, i) => {
+      const q = quoteBy(sym);
+      const cls = q.change >= 0 ? "up" : "down";
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${q.symbol}</td><td>${q.name}</td><td class="${cls}">${q.price.toFixed(2)}</td>` +
+        `<td><button type="button" data-i="${i}" class="wdel">×</button></td>`;
+      tr.addEventListener("click", e => {
+        if (e.target.classList.contains("wdel")) return;
+        const qi = QUOTES.findIndex(x => x.symbol === q.symbol);
+        if (qi >= 0) selectQuote(qi);
+      });
+      tr.querySelector(".wdel").addEventListener("click", e => {
+        e.stopPropagation();
+        store.watchlist.splice(i, 1);
+        save(); renderWatch();
+      });
+      tb.appendChild(tr);
+    });
   }
-  // 工具列換行等原因讓走勢圖大小改變時，也重新調整 canvas。
-  new ResizeObserver(() => chart.resize()).observe(document.getElementById("chart-wrap"));
+  document.getElementById("watch-add").addEventListener("click", () => {
+    const v = document.getElementById("watch-input").value.trim().toUpperCase();
+    if (!/^[A-Z0-9]{4,6}$/.test(v)) return;
+    if (!store.watchlist.includes(v)) store.watchlist.push(v);
+    document.getElementById("watch-input").value = "";
+    save(); renderWatch();
+  });
 
-  // ---- 分割線 ----
-  // 用比例記住位置，視窗縮放時各格等比例變化。
+  // ---- 記事 ----
+  const noteEl = document.getElementById("note-editor");
+  function loadNoteTab(tab) {
+    noteEl.value = tab && tab.text != null ? tab.text : "";
+  }
+  let noteTimer = 0;
+  noteEl.addEventListener("input", () => {
+    const tab = store.panes.left.tabs.find(t => t.id === store.panes.left.active);
+    if (tab && tab.kind === "note") {
+      tab.text = noteEl.value;
+      clearTimeout(noteTimer);
+      noteTimer = setTimeout(save, 400);
+    }
+  });
+
+  // ---- 網頁分頁 ----
+  let suppressUrlWrite = false;
+  function setWebUrlDisplay(url) {
+    const el = document.getElementById("web-url");
+    el.textContent = url;
+    el.title = url;
+  }
+  function shortWebTitle(url) {
+    try {
+      const u = new URL(url);
+      if (u.hostname.includes("yahoo")) {
+        const m = u.pathname.match(/quote\/([A-Z0-9]+)/i);
+        if (m) return m[1];
+        return "Yahoo 股市";
+      }
+      if (u.hostname.includes("twse")) return "證交所";
+      return u.hostname.replace(/^www\./, "");
+    } catch (_) { return "網頁"; }
+  }
+  window.setWebUrl = url => {
+    setWebUrlDisplay(url);
+    if (suppressUrlWrite) return;
+    const tab = store.panes.right.tabs.find(t => t.id === store.panes.right.active);
+    if (tab && tab.kind === "web") {
+      tab.url = url;
+      // 不要用完整網址當標題；有較短名稱時保留，否則用主機名
+      if (!tab.title || tab.title === "網頁" || tab.title === "新分頁" || tab.title.length > 18 || tab.title.startsWith("http")) {
+        tab.title = shortWebTitle(url);
+      }
+      save();
+      renderTabbar("right");
+    }
+  };
+  function activateWebTab(tab) {
+    if (!tab) return;
+    setWebUrlDisplay(tab.url || HOME_URL);
+    suppressUrlWrite = true;
+    send({ type: "open", url: tab.url || HOME_URL });
+    setTimeout(() => { suppressUrlWrite = false; }, 800);
+  }
+  document.getElementById("home").addEventListener("click", () => {
+    const tab = store.panes.right.tabs.find(t => t.id === store.panes.right.active);
+    if (tab && tab.kind === "web") {
+      tab.url = HOME_URL;
+      tab.title = "證交所";
+      save(); renderTabbar("right");
+    }
+    send({ type: "home" });
+    setWebUrlDisplay(HOME_URL);
+  });
+
+  // ---- 分頁 UI ----
+  const addMenus = {};
+  function closeAddMenus() {
+    Object.values(addMenus).forEach(m => { m.hidden = true; });
+  }
+  document.addEventListener("mousedown", e => {
+    if (!e.target.closest(".tab-menu") && !e.target.closest(".tab-add")) closeAddMenus();
+  });
+
+  function renderTabbar(pane) {
+    const bar = document.getElementById("tabbar-" + pane);
+    const state = store.panes[pane];
+    bar.innerHTML = "";
+    const tabsEl = document.createElement("div");
+    tabsEl.className = "tabbar-tabs";
+    state.tabs.forEach(tab => {
+      const el = document.createElement("div");
+      el.className = "tab" + (tab.id === state.active ? " active" : "");
+      el.dataset.id = tab.id;
+      const lab = document.createElement("span");
+      lab.className = "tlabel";
+      lab.textContent = tab.title || tab.kind;
+      lab.title = tab.title || "";
+      const close = document.createElement("span");
+      close.className = "tclose";
+      close.textContent = "×";
+      close.title = "關閉";
+      close.addEventListener("click", e => { e.stopPropagation(); closeTab(pane, tab.id); });
+      el.append(lab, close);
+      el.addEventListener("click", () => activateTab(pane, tab.id));
+      tabsEl.appendChild(el);
+    });
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "tab-add";
+    add.textContent = "+";
+    add.title = "新增分頁";
+    add.addEventListener("click", e => {
+      e.stopPropagation();
+      e.preventDefault();
+      openAddMenu(pane, add);
+    });
+    add.addEventListener("mousedown", e => e.stopPropagation());
+    bar.append(tabsEl, add);
+  }
+
+  function openAddMenu(pane, anchor) {
+    closeAddMenus();
+    let menu = addMenus[pane];
+    if (!menu) {
+      menu = document.createElement("div");
+      menu.className = "tab-menu";
+      menu.hidden = true;
+      document.body.appendChild(menu);
+      addMenus[pane] = menu;
+    }
+    menu.innerHTML = "";
+    const items = pane === "top"
+      ? QUOTES.map(q => ({ label: `走勢圖 ${q.symbol} ${q.name}`, action: () => addChartTab(q.symbol) }))
+      : pane === "left"
+        ? [
+            { label: "報價", action: () => addLeftTab("quotes", "報價") },
+            { label: "自選", action: () => addLeftTab("watch", "自選") },
+            { label: "記事", action: () => addLeftTab("note", "記事") },
+          ]
+        : [
+            { label: "新網頁（首頁）", action: () => addWebTab(HOME_URL, "證交所") },
+            { label: "Yahoo 台積電", action: () => addWebTab("https://tw.stock.yahoo.com/quote/2330.TW", "2330") },
+          ];
+    items.forEach(it => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = it.label;
+      b.addEventListener("click", () => { closeAddMenus(); it.action(); });
+      menu.appendChild(b);
+    });
+    menu.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    menu.style.left = Math.min(r.left, window.innerWidth - 160) + "px";
+    menu.style.top = (r.bottom + 2) + "px";
+  }
+
+  function addChartTab(symbol) {
+    const q = quoteBy(symbol);
+    const tab = { id: uid("chart"), kind: "chart", title: `${q.symbol} ${q.name}`, symbol: q.symbol, period: "D" };
+    store.panes.top.tabs.push(tab);
+    store.panes.top.active = tab.id;
+    save();
+    renderTabbar("top");
+    applyChartTab(tab);
+  }
+  function addLeftTab(kind, title) {
+    const tab = { id: uid(kind), kind, title, text: kind === "note" ? "" : undefined };
+    store.panes.left.tabs.push(tab);
+    store.panes.left.active = tab.id;
+    save();
+    renderTabbar("left");
+    applyLeftTab(tab);
+  }
+  function addWebTab(url, title) {
+    const tab = { id: uid("web"), kind: "web", title: title || shortWebTitle(url), url };
+    store.panes.right.tabs.push(tab);
+    store.panes.right.active = tab.id;
+    save();
+    renderTabbar("right");
+    activateWebTab(tab);
+  }
+
+  function closeTab(pane, id) {
+    const state = store.panes[pane];
+    if (state.tabs.length <= 1) return; // 至少留一頁
+    const idx = state.tabs.findIndex(t => t.id === id);
+    if (idx < 0) return;
+    state.tabs.splice(idx, 1);
+    if (state.active === id) state.active = state.tabs[Math.min(idx, state.tabs.length - 1)].id;
+    save();
+    renderTabbar(pane);
+    activateTab(pane, state.active);
+  }
+
+  function activateTab(pane, id) {
+    const state = store.panes[pane];
+    const tab = state.tabs.find(t => t.id === id);
+    if (!tab) return;
+    const same = state.active === id;
+    state.active = id;
+    if (!same) save();
+    renderTabbar(pane);
+    if (pane === "top") applyChartTab(tab);
+    else if (pane === "left") applyLeftTab(tab);
+    else if (pane === "right") activateWebTab(tab);
+  }
+
+  function applyLeftTab(tab) {
+    document.getElementById("body-quotes").hidden = tab.kind !== "quotes";
+    document.getElementById("body-watch").hidden = tab.kind !== "watch";
+    document.getElementById("body-note").hidden = tab.kind !== "note";
+    if (tab.kind === "watch") renderWatch();
+    if (tab.kind === "note") loadNoteTab(tab);
+  }
+
+  // ---- 分割線（維持原本實作）----
   let topRatio = 0.55, leftRatio = 0.38;
   const MIN_TOP = 120, MIN_BOTTOM = 140, MIN_LEFT = 220, MIN_RIGHT = 240;
   const app = document.getElementById("app"), top = document.getElementById("top");
   const bottom = document.getElementById("bottom"), left = document.getElementById("left");
   const hsplit = document.getElementById("hsplit"), vsplit = document.getElementById("vsplit");
-
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   function applyLayout() {
     const totalH = app.clientHeight - hsplit.offsetHeight;
@@ -177,25 +547,16 @@
     const totalW = bottom.clientWidth - vsplit.offsetWidth;
     const leftW = clamp(Math.round(totalW * leftRatio), MIN_LEFT, Math.max(MIN_LEFT, totalW - MIN_RIGHT));
     left.style.width = leftW + "px";
-    drawChart();
+    chart.resize();
     reportBounds();
   }
-
-  // 拖拉分割線：不用 setPointerCapture，改成
-  //   1) 在分割線上 mousedown（pointerdown 當備援）就進入拖拉狀態；
-  //   2) 放一層全螢幕透明遮罩在最上面，游標固定成調整大小的樣子；
-  //   3) 在 window 上聽 mousemove / pointermove，放開 (mouseup/pointerup) 或視窗失焦 (blur) 就結束。
   const overlay = document.createElement("div");
   overlay.id = "drag-overlay";
   document.body.appendChild(overlay);
-  let drag = null;          // { el, horizontal, moves }
-  let lastPoint = null;     // 最後一次滑鼠位置 { x, y }
-
+  let drag = null, lastPoint = null;
   function startDrag(el, horizontal, e) {
-    if (drag) return;                     // mousedown 和 pointerdown 都會來，只處理第一個
+    if (drag) return;
     if (e.button !== undefined && e.button !== 0) return;
-    // 只對 mousedown 取消預設動作（不要選取文字、不要開始原生拖放）。
-    // pointerdown 不呼叫 preventDefault，否則瀏覽器會停送後續的 mousemove/mouseup。
     if (e.type === "mousedown") e.preventDefault();
     drag = { el, horizontal, moves: 0 };
     lastPoint = { x: e.clientX, y: e.clientY };
@@ -204,17 +565,14 @@
     overlay.classList.add("on");
     log(`drag start ${horizontal ? "h" : "v"} via ${e.type} at ${e.clientX},${e.clientY}`);
   }
-
   function moveDrag(e) {
     if (!drag) return;
-    // 放開按鍵的事件如果被別的視窗（例如右下的網頁）吃掉，移動時 buttons 會是 0，就在這裡結束。
     if (e.type === "mousemove" && e.buttons === 0 && drag.moves > 0) { endDrag(e); return; }
     drag.moves++;
     if (drag.moves === 1) log(`first move via ${e.type} at ${e.clientX},${e.clientY} buttons=${e.buttons}`);
     lastPoint = { x: e.clientX, y: e.clientY };
     scheduleLayout();
   }
-
   function endDrag(e) {
     if (!drag) return;
     if (e && e.clientX !== undefined) lastPoint = { x: e.clientX, y: e.clientY };
@@ -225,8 +583,6 @@
     drag = null;
     applyLayout();
   }
-
-  // 依最後的滑鼠位置算出新比例。
   function updateRatios() {
     if (!drag || !lastPoint) return;
     if (drag.horizontal) {
@@ -237,7 +593,6 @@
       leftRatio = clamp((lastPoint.x - r.left - vsplit.offsetWidth / 2) / (r.width - vsplit.offsetWidth), 0.05, 0.95);
     }
   }
-
   function makeSplitter(el, horizontal) {
     el.addEventListener("mousedown", e => startDrag(el, horizontal, e));
     el.addEventListener("pointerdown", e => startDrag(el, horizontal, e));
@@ -252,9 +607,6 @@
   window.addEventListener("pointerup", endDrag, true);
   window.addEventListener("pointercancel", endDrag, true);
   window.addEventListener("blur", endDrag);
-
-  // 拖拉中的版面更新：最多每 16ms 一次。用 setTimeout 而不是 requestAnimationFrame，
-  // 因為有些環境（視窗被遮住、沒有合成器）rAF 會暫停，畫面就不會跟著動。
   let layoutTimer = 0, lastLayoutAt = 0;
   function scheduleLayout() {
     if (layoutTimer) return;
@@ -267,9 +619,6 @@
     }, wait);
   }
 
-  // ---- 回報右下格位置給 Rust ----
-  // getBoundingClientRect 是 CSS 像素；乘上 devicePixelRatio 變成實體像素，
-  // 這樣網頁被縮放（Ctrl+滾輪）或 Windows 縮放 125%/150% 時都會對齊。
   const slot = document.getElementById("web-slot");
   let lastSent = "";
   function reportBounds() {
@@ -286,31 +635,32 @@
     send(msg);
   }
 
-  // 除錯訊息：用 XQ_DEBUG=1 啟動時，Rust 會把這些印到 stderr（不需要開發者工具）。
-  function log(text) {
-    if (window.XQ_DEBUG) send({ type: "log", msg: String(text) });
-  }
-
-  function send(msg) {
-    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(JSON.stringify(msg));
-    else console.log("ipc", msg);
-  }
-
-  // Rust 在子網頁載入完成後呼叫，用來顯示目前網址。
-  window.setWebUrl = url => {
-    const el = document.getElementById("web-url");
-    el.textContent = url;
-    el.title = url;
-  };
-
-  document.getElementById("home").addEventListener("click", () => send({ type: "home" }));
   makeSplitter(hsplit, true);
   makeSplitter(vsplit, false);
   window.addEventListener("resize", scheduleLayout);
   new ResizeObserver(() => reportBounds()).observe(slot);
+  new ResizeObserver(() => chart.resize()).observe(document.getElementById("chart-wrap"));
+
+  // 啟動：畫分頁列並套用目前分頁
+  try { if (window.XQ_DEBUG && window.ipc) window.ipc.postMessage(JSON.stringify({type:"log",msg:"before-renderTabbar tabs="+document.querySelectorAll('.tabbar').length})); } catch(e){}
+  renderTabbar("top");
+  renderTabbar("left");
+  renderTabbar("right");
+  try {
+    const rs=[...document.querySelectorAll('.tabbar,.title')].map(el=>{
+      const r=el.getBoundingClientRect();
+      return el.id||el.className+':'+Math.round(r.x)+','+Math.round(r.y)+','+Math.round(r.w||r.width)+'x'+Math.round(r.h||r.height)+'/disp='+getComputedStyle(el).display+'/h='+getComputedStyle(el).height;
+    });
+    if (window.XQ_DEBUG && window.ipc) window.ipc.postMessage(JSON.stringify({type:"log",msg:"rects "+rs.join(' | ')}));
+  } catch(e){ if(window.ipc) window.ipc.postMessage(JSON.stringify({type:"log",msg:"rect-err "+e.message})); }
   renderQuotes();
+  renderWatch();
+  applyChartTab(store.panes.top.tabs.find(t => t.id === store.panes.top.active));
+  applyLeftTab(store.panes.left.tabs.find(t => t.id === store.panes.left.active));
+  activateWebTab(store.panes.right.tabs.find(t => t.id === store.panes.right.active));
   applyLayout();
   window.addEventListener("load", applyLayout);
+  setTimeout(() => { renderTabbar("top"); renderTabbar("left"); renderTabbar("right"); applyLayout(); }, 50);
 })();
 </script>
 </body>

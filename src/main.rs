@@ -30,6 +30,8 @@ enum IpcMessage {
     Quote { symbol: String },
     /// 回到首頁。
     Home,
+    /// 在右下子 webview 開啟指定網址（分頁切換、新分頁用）。
+    Open { url: String },
     /// 除錯訊息（XQ_DEBUG=1 時 JS 才會送），印到 stderr。
     Log { msg: String },
     /// 畫線與指標設定，整份存成 JSON 檔（下次啟動時再交回給網頁）。
@@ -159,6 +161,11 @@ fn main() -> wry::Result<()> {
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Home)) => {
                 let _ = web_view.load_url(HOME_URL);
+            }
+            Event::UserEvent(UserEvent::Ipc(IpcMessage::Open { url })) => {
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    let _ = web_view.load_url(&url);
+                }
             }
             Event::UserEvent(UserEvent::Navigate(url)) => {
                 if url.starts_with("https://") || url.starts_with("http://") {
