@@ -20,6 +20,21 @@
   const NEED = { trend: 2, ray: 2, hline: 1, vline: 1, channel: 3, fib: 2, rect: 2, text: 1 };
   const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
   const FIB_COLORS = ["#9e9e9e", "#e5484d", "#f5a623", "#4caf50", "#26a69a", "#4fc3f7", "#9e9e9e"];
+  // 長橋風格左側常駐圖示列（inline SVG，無外部資源）
+  const ICO = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const DRAW_ICONS = {
+    cursor: ICO('<path d="M5 3l14 9-6 1.5L10 21z"/>'),
+    trend: ICO('<path d="M4 18L20 6"/><circle cx="4" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="6" r="1.6" fill="currentColor" stroke="none"/>'),
+    ray: ICO('<path d="M5 18L19 6"/><circle cx="5" cy="18" r="1.6" fill="currentColor" stroke="none"/><path d="M19 6l3-1.5"/>'),
+    hline: ICO('<path d="M3 12h18"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>'),
+    vline: ICO('<path d="M12 3v18"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>'),
+    channel: ICO('<path d="M4 16L16 4"/><path d="M8 20L20 8"/><circle cx="4" cy="16" r="1.4" fill="currentColor" stroke="none"/><circle cx="16" cy="4" r="1.4" fill="currentColor" stroke="none"/>'),
+    fib: ICO('<path d="M4 5h16M4 10h16M4 14h16M4 19h16"/><path d="M4 5v14"/>'),
+    rect: ICO('<rect x="4" y="6" width="16" height="12" rx="1"/>'),
+    text: ICO('<path d="M5 6h14"/><path d="M12 6v12"/><path d="M8 18h8"/>'),
+    delete: ICO('<path d="M5 7h14"/><path d="M9 7V5h6v2"/><path d="M8 7l1 12h6l1-12"/>'),
+    clear: ICO('<path d="M5 6h14l-1.2 14H6.2L5 6z"/><path d="M9 10v6M12 10v6M15 10v6"/><path d="M9 6V4h6v2"/>'),
+  };
   const SUB_ORDER = ["vol", "kd", "macd", "rsi", "wr", "dmi", "atr", "obv"];
   const MAX_OVERLAYS = 20;   // 主圖疊加最多 20 組（同類型不同參數各自算一組）
   const MAX_SUBS = 10;       // 副圖最多 10 格（左欄+右欄）
@@ -329,7 +344,7 @@
   function create(canvas, toolbar) {
     const g = canvas.getContext("2d");
     const host = toolbar.parentElement;       // #top（選單掛在這裡）
-    const wrap = canvas.parentElement;        // #chart-wrap（文字輸入框掛在這裡）
+    const wrap = canvas.parentElement;        // #chart-stage（文字輸入框掛在這裡；左側為 draw-rail）
     const cache = {}, views = {};
     let tabId = "chart-1", quote = null;
     let period = PERIODS.some(p => p[0] === store.ui.period) ? store.ui.period : "D";
@@ -429,12 +444,33 @@
     gp = mkGroup();
     mkBtn(gp, "ind", "指標 ▾", b => toggleMenu(indMenu, b));
     gp = mkGroup();
-    mkBtn(gp, "cursor", "游標", () => { tool = "cursor"; pending = null; closeMenus(); sync(); render(); });
-    mkBtn(gp, "draw", "畫線 ▾", b => toggleMenu(drawMenu, b));
-    gp = mkGroup();
-    mkBtn(gp, "delete", "刪除", () => { deleteSelected(); render(); });
-    mkBtn(gp, "clear", "全部清除", () => { drawings().length = 0; selected = -1; save(); markDrawingsDirty(); sync(); render(); });
     mkBtn(gp, "reset", "重設縮放", () => { delete views[key()]; render(); });
+
+    // 左側常駐畫線工具列（長橋風格）：圖示 + 中文 title，不重建 DOM
+    const rail = document.getElementById("draw-rail") || (() => {
+      const el = document.createElement("aside"); el.id = "draw-rail"; el.className = "draw-rail";
+      wrap.parentElement.insertBefore(el, wrap); return el;
+    })();
+    function mkRailBtn(id, title, html, onClick) {
+      const b = document.createElement("button");
+      b.type = "button"; b.title = title; b.setAttribute("aria-label", title);
+      b.innerHTML = html;
+      b.addEventListener("click", e => { e.stopPropagation(); onClick(b); });
+      btn[id] = b; rail.appendChild(b); return b;
+    }
+    function railSep() { const s = document.createElement("div"); s.className = "rail-sep"; rail.appendChild(s); }
+    mkRailBtn("cursor", "游標", DRAW_ICONS.cursor, () => { tool = "cursor"; pending = null; closeMenus(); sync(); render(); });
+    railSep();
+    for (const [id, label] of DRAW_TOOLS) {
+      mkRailBtn("draw:" + id, label, DRAW_ICONS[id], () => {
+        drawTool = id; tool = "draw"; pending = null; closeMenus(); sync(); render();
+      });
+    }
+    railSep();
+    mkRailBtn("delete", "刪除選取", DRAW_ICONS.delete, () => { deleteSelected(); render(); });
+    mkRailBtn("clear", "全部清除", DRAW_ICONS.clear, () => {
+      drawings().length = 0; selected = -1; save(); markDrawingsDirty(); sync(); render();
+    });
 
     function makeMenu(cls) {
       const m = document.createElement("div");
@@ -444,13 +480,6 @@
       return m;
     }
     const indMenu = makeMenu("ind-menu");
-    const drawMenu = makeMenu("draw-menu");
-    for (const [id, label] of DRAW_TOOLS) {
-      const b = document.createElement("button");
-      b.className = "menu-item"; b.textContent = label; b.dataset.id = id;
-      b.addEventListener("click", () => { drawTool = id; tool = "draw"; pending = null; closeMenus(); sync(); render(); });
-      drawMenu.appendChild(b);
-    }
     function buildIndMenu() {
       indMenu.innerHTML = "";
       ensureOverlays(entry);
@@ -567,20 +596,19 @@
       menu.style.top = ar.bottom - hr.top + 2 + "px";
       menu.style.maxHeight = Math.max(80, hr.bottom - ar.bottom - 8) + "px"; // 不超出上方走勢圖格（避免被右下網頁蓋住）
     }
-    function closeMenus() { indMenu.hidden = true; drawMenu.hidden = true; }
+    function closeMenus() { indMenu.hidden = true; }
     document.addEventListener("mousedown", () => closeMenus());
 
     function sync() {
       for (const [id] of PERIODS) btn["period:" + id].classList.toggle("on", id === period);
       btn.cursor.classList.toggle("on", tool === "cursor");
-      const dname = DRAW_TOOLS.find(t => t[0] === drawTool)[1];
-      const dl = tool === "draw" ? `畫線：${dname} ▾` : "畫線 ▾";
-      if (btn.draw.textContent !== dl) btn.draw.textContent = dl; // 不要無謂地換掉文字節點：WebKit 會因此吞掉按鈕的 click
-      btn.draw.classList.toggle("on", tool === "draw");
-      for (const b of drawMenu.children) b.classList.toggle("on", b.dataset.id === drawTool);
+      for (const [id] of DRAW_TOOLS) {
+        const b = btn["draw:" + id];
+        if (b) b.classList.toggle("on", tool === "draw" && drawTool === id);
+      }
       btn.delete.disabled = selected < 0;
       btn.clear.disabled = !entry || drawings().length === 0;
-      canvas.style.cursor = pan ? "grabbing" : drag ? "move" : "crosshair";
+      canvas.style.cursor = pan ? "grabbing" : drag ? "move" : (tool === "cursor" ? "crosshair" : "crosshair");
     }
     function setPeriod(id) {
       period = id; store.ui.period = id; save();
