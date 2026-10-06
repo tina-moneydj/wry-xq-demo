@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>XQ 風格測試</title>
+<style>
+  :root {
+    --bg: #111; --pane: #161616; --line: #333; --text: #e6e6e6; --dim: #8a8a8a;
+    --up: #e5484d; --down: #30a46c; --sel: #243044; --split: #2a2a2a; --split-hot: #3b82f6;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+    font: 13px/1.4 "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", sans-serif; user-select: none; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  .title { height: 28px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 10px;
+    background: #1d1d1d; border-bottom: 1px solid var(--line); color: var(--dim); white-space: nowrap; overflow: hidden; }
+  .title b { color: var(--text); font-weight: 600; }
+  .title .grow { flex: 1; }
+  .title button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 3px;
+    font: inherit; padding: 1px 8px; cursor: pointer; }
+  .title button:hover { background: #363636; }
+  #top { flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--pane); position: relative; }
+  #chart-wrap { flex: 1; position: relative; min-height: 0; }
+  /* 工具列：空間不夠時自動換行，不會被截掉 */
+  .toolbar { min-height: 28px; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; padding: 3px 8px;
+    background: #191919; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .tb-group { display: flex; gap: 2px; padding-right: 8px; border-right: 1px solid #2c2c2c; }
+  .tb-group:last-child { border-right: none; }
+  .toolbar button, .tb-menu button { background: #232323; color: #cfcfcf; border: 1px solid #3a3a3a; border-radius: 3px;
+    font: inherit; font-size: 12px; padding: 1px 8px; height: 22px; cursor: pointer; }
+  .toolbar button:hover:not(:disabled), .tb-menu button:hover { background: #2f2f2f; }
+  .toolbar button.on, .tb-menu button.on { background: #1f3a66; border-color: #3b82f6; color: #fff; }
+  .toolbar button:disabled { opacity: 0.4; cursor: default; }
+  /* 下拉選單（指標、畫線）：最高只到走勢圖格底部，避免被右下的網頁蓋住 */
+  .tb-menu { position: absolute; z-index: 50; background: #1d1d1d; border: 1px solid #444; border-radius: 4px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.5); padding: 6px; overflow-y: auto; font-size: 12px; }
+  .tb-menu[hidden] { display: none; }
+  .draw-menu { display: flex; flex-direction: column; gap: 2px; min-width: 130px; }
+  .draw-menu .menu-item { text-align: left; }
+  .ind-menu { width: 400px; }
+  .ind-menu .menu-item { margin-top: 6px; }
+  .menu-title { color: var(--dim); margin: 4px 2px 3px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+  .ind-row { display: flex; align-items: center; gap: 5px; padding: 2px; white-space: nowrap; }
+  .ind-row:hover { background: #262626; }
+  .ind-name { width: 130px; color: #ddd; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  .ind-pl { color: var(--dim); }
+  .ind-row input[type=number] { width: 52px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 3px; font: inherit; padding: 1px 3px; }
+  input { user-select: text; }
+  .chart-text-input { position: absolute; z-index: 20; width: 220px; height: 26px; background: #111; color: #ffb000;
+    border: 1px solid #ffb000; border-radius: 3px; font: 13px sans-serif; padding: 2px 6px; outline: none; }
+  .chart-text-input[hidden] { display: none; }
+  #chart { cursor: crosshair; }
+  #chart { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #bottom { flex: 1; display: flex; min-height: 0; }
+  #left { flex: none; display: flex; flex-direction: column; min-width: 0; background: var(--pane); }
+  #right { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #101010; }
+  #web-slot { flex: 1; position: relative; min-height: 0; }
+  #web-slot .hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); }
+  .splitter { flex: none; position: relative; z-index: 5; background: var(--split); touch-action: none; }
+  .splitter:hover, .splitter.dragging { background: var(--split-hot); }
+  /* 看得到的線 6px，但可以按的範圍上下/左右各多 4px，比較好抓 */
+  .splitter::before { content: ""; position: absolute; }
+  #hsplit { height: 6px; cursor: row-resize; }
+  #hsplit::before { left: 0; right: 0; top: -4px; bottom: -4px; }
+  #vsplit { width: 6px; cursor: col-resize; }
+  #vsplit::before { top: 0; bottom: 0; left: -4px; right: -4px; }
+  /* 拖拉時蓋在整個畫面最上層的透明層：滑鼠不管移到哪裡，事件都由它接 */
+  #drag-overlay { position: fixed; inset: 0; z-index: 2147483647; display: none; background: transparent; }
+  #drag-overlay.on { display: block; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 6px 10px; text-align: right; white-space: nowrap; }
+  th { color: var(--dim); font-weight: normal; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--pane); }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #222; }
+  tbody tr.sel { background: var(--sel); }
+  .up { color: var(--up); } .down { color: var(--down); }
+  #quotes { flex: 1; overflow: auto; }
+  .note { flex: none; padding: 6px 10px; color: var(--dim); border-top: 1px solid var(--line); font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <section id="top">
+    <div class="title"><b>走勢圖</b><span id="chart-title"></span><span class="grow"></span><span>示範資料（假的）</span></div>
+    <div id="chart-toolbar" class="toolbar"></div>
+    <div id="chart-wrap"><canvas id="chart"></canvas></div>
+  </section>
+  <div id="hsplit" class="splitter"></div>
+  <section id="bottom">
+    <section id="left">
+      <div class="title"><b>報價</b><span class="grow"></span><span>點一檔看走勢與網頁</span></div>
+      <div id="quotes">
+        <table>
+          <thead><tr><th>代號</th><th>名稱</th><th>成交</th><th>漲跌</th><th>漲幅</th></tr></thead>
+          <tbody id="quote-rows"></tbody>
+        </table>
+      </div>
+      <div class="note">以上報價全部是假的示範資料，不是即時行情。</div>
+    </section>
+    <div id="vsplit" class="splitter"></div>
+    <section id="right">
+      <div class="title"><b>網頁</b><span id="web-url">載入中…</span><span class="grow"></span><button id="home">首頁</button></div>
+      <div id="web-slot"><div class="hint">網頁載入中…</div></div>
+    </section>
+  </section>
+</div>
+
+<script>
+  // 除錯：XQ_DEBUG=1 時把 JS 錯誤送到 Rust 的 stderr。
+  window.addEventListener("error", e => {
+    if (window.XQ_DEBUG && window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg: `JS error: ${e.message} (line ${e.lineno})` }));
+  });
+</script>
+<script>/*__CHART_JS__*/</script>
+<script>
+(() => {
+  // ---- 假的示範資料 ----
+  const QUOTES = [
+    { symbol: "2330", name: "台積電",   price: 1035.0, change: +12.0 },
+    { symbol: "2317", name: "鴻海",     price: 198.5,  change: -1.5 },
+    { symbol: "2454", name: "聯發科",   price: 1280.0, change: +8.0 },
+    { symbol: "0050", name: "元大台灣50", price: 186.2,  change: +0.4 },
+  ];
+  let selected = 0;
+
+  // ---- 報價表 ----
+  const rows = document.getElementById("quote-rows");
+  function renderQuotes() {
+    rows.innerHTML = "";
+    QUOTES.forEach((q, i) => {
+      const cls = q.change >= 0 ? "up" : "down";
+      const sign = q.change >= 0 ? "+" : "";
+      const pct = (q.change / (q.price - q.change)) * 100;
+      const tr = document.createElement("tr");
+      if (i === selected) tr.className = "sel";
+      tr.innerHTML = `<td>${q.symbol}</td><td>${q.name}</td><td class="${cls}">${q.price.toFixed(2)}</td>` +
+        `<td class="${cls}">${sign}${q.change.toFixed(2)}</td><td class="${cls}">${sign}${pct.toFixed(2)}%</td>`;
+      tr.addEventListener("click", () => selectQuote(i));
+      rows.appendChild(tr);
+    });
+  }
+
+  function selectQuote(i) {
+    selected = i;
+    renderQuotes();
+    drawChart();
+    send({ type: "quote", symbol: QUOTES[i].symbol });
+  }
+
+  // ---- 走勢圖（技術分析，程式在 chart.js）----
+  const chart = XQChart.create(document.getElementById("chart"), document.getElementById("chart-toolbar"));
+  function drawChart() {
+    const q = QUOTES[selected];
+    const up = q.change >= 0;
+    document.getElementById("chart-title").innerHTML =
+      `${q.symbol} ${q.name}　<span class="${up ? "up" : "down"}">${q.price.toFixed(2)}　${up ? "+" : ""}${q.change.toFixed(2)}</span>`;
+    chart.setQuote(q);
+    chart.resize();
+  }
+  // 工具列換行等原因讓走勢圖大小改變時，也重新調整 canvas。
+  new ResizeObserver(() => chart.resize()).observe(document.getElementById("chart-wrap"));
+
+  // ---- 分割線 ----
+  // 用比例記住位置，視窗縮放時各格等比例變化。
+  let topRatio = 0.55, leftRatio = 0.38;
+  const MIN_TOP = 120, MIN_BOTTOM = 140, MIN_LEFT = 220, MIN_RIGHT = 240;
+  const app = document.getElementById("app"), top = document.getElementById("top");
+  const bottom = document.getElementById("bottom"), left = document.getElementById("left");
+  const hsplit = document.getElementById("hsplit"), vsplit = document.getElementById("vsplit");
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  function applyLayout() {
+    const totalH = app.clientHeight - hsplit.offsetHeight;
+    const topH = clamp(Math.round(totalH * topRatio), MIN_TOP, Math.max(MIN_TOP, totalH - MIN_BOTTOM));
+    top.style.height = topH + "px";
+    const totalW = bottom.clientWidth - vsplit.offsetWidth;
+    const leftW = clamp(Math.round(totalW * leftRatio), MIN_LEFT, Math.max(MIN_LEFT, totalW - MIN_RIGHT));
+    left.style.width = leftW + "px";
+    drawChart();
+    reportBounds();
+  }
+
+  // 拖拉分割線：不用 setPointerCapture，改成
+  //   1) 在分割線上 mousedown（pointerdown 當備援）就進入拖拉狀態；
+  //   2) 放一層全螢幕透明遮罩在最上面，游標固定成調整大小的樣子；
+  //   3) 在 window 上聽 mousemove / pointermove，放開 (mouseup/pointerup) 或視窗失焦 (blur) 就結束。
+  const overlay = document.createElement("div");
+  overlay.id = "drag-overlay";
+  document.body.appendChild(overlay);
+  let drag = null;          // { el, horizontal, moves }
+  let lastPoint = null;     // 最後一次滑鼠位置 { x, y }
+
+  function startDrag(el, horizontal, e) {
+    if (drag) return;                     // mousedown 和 pointerdown 都會來，只處理第一個
+    if (e.button !== undefined && e.button !== 0) return;
+    // 只對 mousedown 取消預設動作（不要選取文字、不要開始原生拖放）。
+    // pointerdown 不呼叫 preventDefault，否則瀏覽器會停送後續的 mousemove/mouseup。
+    if (e.type === "mousedown") e.preventDefault();
+    drag = { el, horizontal, moves: 0 };
+    lastPoint = { x: e.clientX, y: e.clientY };
+    el.classList.add("dragging");
+    overlay.style.cursor = horizontal ? "row-resize" : "col-resize";
+    overlay.classList.add("on");
+    log(`drag start ${horizontal ? "h" : "v"} via ${e.type} at ${e.clientX},${e.clientY}`);
+  }
+
+  function moveDrag(e) {
+    if (!drag) return;
+    // 放開按鍵的事件如果被別的視窗（例如右下的網頁）吃掉，移動時 buttons 會是 0，就在這裡結束。
+    if (e.type === "mousemove" && e.buttons === 0 && drag.moves > 0) { endDrag(e); return; }
+    drag.moves++;
+    if (drag.moves === 1) log(`first move via ${e.type} at ${e.clientX},${e.clientY} buttons=${e.buttons}`);
+    lastPoint = { x: e.clientX, y: e.clientY };
+    scheduleLayout();
+  }
+
+  function endDrag(e) {
+    if (!drag) return;
+    if (e && e.clientX !== undefined) lastPoint = { x: e.clientX, y: e.clientY };
+    updateRatios();
+    log(`drag end via ${e ? e.type : "?"}, ${drag.moves} moves, top=${topRatio.toFixed(3)} left=${leftRatio.toFixed(3)}`);
+    drag.el.classList.remove("dragging");
+    overlay.classList.remove("on");
+    drag = null;
+    applyLayout();
+  }
+
+  // 依最後的滑鼠位置算出新比例。
+  function updateRatios() {
+    if (!drag || !lastPoint) return;
+    if (drag.horizontal) {
+      const r = app.getBoundingClientRect();
+      topRatio = clamp((lastPoint.y - r.top - hsplit.offsetHeight / 2) / (r.height - hsplit.offsetHeight), 0.05, 0.95);
+    } else {
+      const r = bottom.getBoundingClientRect();
+      leftRatio = clamp((lastPoint.x - r.left - vsplit.offsetWidth / 2) / (r.width - vsplit.offsetWidth), 0.05, 0.95);
+    }
+  }
+
+  function makeSplitter(el, horizontal) {
+    el.addEventListener("mousedown", e => startDrag(el, horizontal, e));
+    el.addEventListener("pointerdown", e => startDrag(el, horizontal, e));
+    el.addEventListener("dblclick", () => {
+      if (horizontal) topRatio = 0.55; else leftRatio = 0.38;
+      applyLayout();
+    });
+  }
+  window.addEventListener("mousemove", moveDrag, true);
+  window.addEventListener("pointermove", moveDrag, true);
+  window.addEventListener("mouseup", endDrag, true);
+  window.addEventListener("pointerup", endDrag, true);
+  window.addEventListener("pointercancel", endDrag, true);
+  window.addEventListener("blur", endDrag);
+
+  // 拖拉中的版面更新：最多每 16ms 一次。用 setTimeout 而不是 requestAnimationFrame，
+  // 因為有些環境（視窗被遮住、沒有合成器）rAF 會暫停，畫面就不會跟著動。
+  let layoutTimer = 0, lastLayoutAt = 0;
+  function scheduleLayout() {
+    if (layoutTimer) return;
+    const wait = Math.max(0, 16 - (performance.now() - lastLayoutAt));
+    layoutTimer = setTimeout(() => {
+      layoutTimer = 0;
+      lastLayoutAt = performance.now();
+      updateRatios();
+      applyLayout();
+    }, wait);
+  }
+
+  // ---- 回報右下格位置給 Rust ----
+  // getBoundingClientRect 是 CSS 像素；乘上 devicePixelRatio 變成實體像素，
+  // 這樣網頁被縮放（Ctrl+滾輪）或 Windows 縮放 125%/150% 時都會對齊。
+  const slot = document.getElementById("web-slot");
+  let lastSent = "";
+  function reportBounds() {
+    const r = slot.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const msg = {
+      type: "bounds",
+      x: Math.round(r.left * dpr), y: Math.round(r.top * dpr),
+      w: Math.round(r.width * dpr), h: Math.round(r.height * dpr),
+    };
+    const s = JSON.stringify(msg);
+    if (s === lastSent) return;
+    lastSent = s;
+    send(msg);
+  }
+
+  // 除錯訊息：用 XQ_DEBUG=1 啟動時，Rust 會把這些印到 stderr（不需要開發者工具）。
+  function log(text) {
+    if (window.XQ_DEBUG) send({ type: "log", msg: String(text) });
+  }
+
+  function send(msg) {
+    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(JSON.stringify(msg));
+    else console.log("ipc", msg);
+  }
+
+  // Rust 在子網頁載入完成後呼叫，用來顯示目前網址。
+  window.setWebUrl = url => {
+    const el = document.getElementById("web-url");
+    el.textContent = url;
+    el.title = url;
+  };
+
+  document.getElementById("home").addEventListener("click", () => send({ type: "home" }));
+  makeSplitter(hsplit, true);
+  makeSplitter(vsplit, false);
+  window.addEventListener("resize", scheduleLayout);
+  new ResizeObserver(() => reportBounds()).observe(slot);
+  renderQuotes();
+  applyLayout();
+  window.addEventListener("load", applyLayout);
+})();
+</script>
+</body>
+</html>
