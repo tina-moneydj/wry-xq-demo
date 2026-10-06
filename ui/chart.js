@@ -475,6 +475,17 @@
     const host = toolbar.parentElement;       // #top（選單掛在這裡）
     const wrap = canvas.parentElement;        // #chart-stage（文字輸入框掛在這裡；左側為 draw-rail）
     const cache = {}, views = {};
+    const MAX_SERIES_CACHE = 48; // ≥16 分頁 × 多週期；超出淘汰最舊
+    const cacheOrder = [];
+    function touchCacheKey(k) {
+      const i = cacheOrder.indexOf(k);
+      if (i >= 0) cacheOrder.splice(i, 1);
+      cacheOrder.push(k);
+      while (cacheOrder.length > MAX_SERIES_CACHE) {
+        const old = cacheOrder.shift();
+        if (old && old !== k) { delete cache[old]; delete views[old]; }
+      }
+    }
     let tabId = "chart-1", quote = null;
     let period = PERIODS.some(p => p[0] === store.ui.period) ? store.ui.period : "D";
     let entry = null;                         // { cfg, drawings } of current tab|symbol|period
@@ -488,15 +499,75 @@
     const drawG = drawLayer.getContext("2d");
     let drawLayerDirty = true;
     let spatialDirty = true;
-    let drawViewKey = "";
     let drawGen = 0;
+    let drawPanDx = 0; // 平移時快取層水平偏移（CSS px）；鬆手後重建清零
+    let drawCache = { stable: "", right: 0, barW: 0, lo: NaN, hi: NaN };
     let spatial = { cell: 64, cols: 0, rows: 0, buckets: [], geoms: [] };
-    function markDrawingsDirty() { drawLayerDirty = true; spatialDirty = true; drawGen++; }
-    function layoutFingerprint(L, v) {
+    // 分頁切換：先貼上一幀快照，再延後重算（避免卡頓）
+    const tabSnaps = new Map(); // tabId -> { canvas, ctx, cssW, cssH }
+    let switchDeferToken = 0;
+    function captureTabSnapshot(id) {
+      if (!id || cssW < 40 || cssH < 40 || !canvas.width) return;
+      let snap = tabSnaps.get(id);
+      if (!snap) {
+        const c = document.createElement("canvas");
+        snap = { canvas: c, ctx: c.getContext("2d"), cssW: 0, cssH: 0 };
+        tabSnaps.set(id, snap);
+      }
+      const w = canvas.width, h = canvas.height;
+      if (snap.canvas.width !== w || snap.canvas.height !== h) {
+        snap.canvas.width = w; snap.canvas.height = h;
+      }
+      snap.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      snap.ctx.clearRect(0, 0, w, h);
+      try { snap.ctx.drawImage(canvas, 0, 0); } catch (_) { return; }
+      snap.cssW = cssW; snap.cssH = cssH;
+      // 軟上限：與分頁數對齊
+      while (tabSnaps.size > 24) {
+        const oldest = tabSnaps.keys().next().value;
+        if (oldest === id) break;
+        tabSnaps.delete(oldest);
+      }
+    }
+    function blitTabSnapshot(id) {
+      const snap = tabSnaps.get(id);
+      if (!snap || snap.cssW !== cssW || snap.cssH !== cssH) return false;
+      if (!snap.canvas.width) return false;
+      const dpr = window.devicePixelRatio || 1;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, canvas.width, canvas.height);
+      g.drawImage(snap.canvas, 0, 0);
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return true;
+    }
+    function scheduleDeferredRender() {
+      const token = ++switchDeferToken;
+      requestAnimationFrame(() => {
+        if (token !== switchDeferToken) return;
+        requestAnimationFrame(() => {
+          if (token !== switchDeferToken) return;
+          render();
+        });
+      });
+    }
+    function ensureCanvasSize() {
+      const dpr = window.devicePixelRatio || 1;
+      cssW = canvas.clientWidth; cssH = canvas.clientHeight;
+      const w = Math.round(cssW * dpr), h = Math.round(cssH * dpr);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w; canvas.height = h;
+        markDrawingsDirty();
+        return true;
+      }
+      return false;
+    }
+    function markDrawingsDirty() { drawLayerDirty = true; spatialDirty = true; drawGen++; drawPanDx = 0; }
+    /** 不含 v.right：純平移可用快取平移，不必重畫 1000 條工具 */
+    function stableDrawFingerprint(L, v) {
       const pr = L && L.panes && L.panes[0];
       return [
         cssW, cssH, period, selected, drawGen,
-        v && v.right, v && v.barW,
+        v && v.barW,
         L && L.plotL, L && L.plotR,
         pr && pr.lo, pr && pr.hi, pr && pr.top, pr && pr.h, pr && pr.y0, pr && pr.ph,
       ].join("|");
@@ -536,6 +607,7 @@
           cache[k] = { bars, memo: {} };
         }
       }
+      touchCacheKey(k);
       return cache[k];
     }
     function ind(id) {
@@ -762,12 +834,11 @@
         render();
       });
     }
-    function resize() {
-      const dpr = window.devicePixelRatio || 1;
-      cssW = canvas.clientWidth; cssH = canvas.clientHeight;
-      const w = Math.round(cssW * dpr), h = Math.round(cssH * dpr);
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-      markDrawingsDirty();
+    function resize(opts) {
+      opts = opts || {};
+      const changed = ensureCanvasSize();
+      if (changed) markDrawingsDirty();
+      if (opts.defer) { requestRender(); return; }
       render();
     }
 
@@ -955,6 +1026,12 @@
         if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
         if (!(hi > lo)) hi = lo + 1;
         if (!spec || !spec.fixed) { const m = (hi - lo) * 0.07; if (!(spec && spec.lo === 0 && lo === 0)) lo -= m; hi += m; }
+        // 平移／拖曳中鎖住主圖價軸，避免 lo/hi 隨可視窗抖動讓繪圖快取失效
+        if (!spec && (pan || drag || interactionBusy)
+            && Number.isFinite(drawCache.lo) && Number.isFinite(drawCache.hi)
+            && drawCache.hi > drawCache.lo && !drawLayerDirty) {
+          lo = drawCache.lo; hi = drawCache.hi;
+        }
         const yOf = val => top + h * (1 - (val - lo) / (hi - lo));
         Object.assign(pane, { lo, hi, y0: top, ph: h, yOf, valAt: y => lo + (1 - (y - top) / h) * (hi - lo) });
 
@@ -1017,6 +1094,7 @@
       compositeDrawLayer(L);
       if (hov >= 0) crosshair(L, bars, hov);
       sync();
+      captureTabSnapshot(tabId);
     }
 
     function line(arr, color, i0, i1, xOf, yOf, width = 1.2) {
@@ -1275,35 +1353,79 @@
       drawG.font = "11px sans-serif";
       drawG.textBaseline = "middle";
       const pr = L.panes[0], list = drawings();
+      const v = view();
       L._measureCtx = drawG;
-      // selected 在拖曳／高亮時每幀即時畫，不進靜態快取（行情 tick 也不必重建）
+      // selected／hline 不進快取：hline 是視窗寬度線，平移時改即時畫才正確
       drawG.save();
       drawG.beginPath(); drawG.rect(L.plotL, pr.top, L.plotW, pr.h); drawG.clip();
       for (let idx = 0; idx < list.length; idx++) {
         if (idx === selected) continue;
         const d = list[idx];
+        if (d.type === "hline") continue;
         paintOneDrawing(drawG, d, idx, L, geom(d, L), false);
       }
       drawG.restore();
       drawG.lineWidth = 1;
-      paintHlineLabels(drawG, L, list.filter((_, i) => i !== selected));
       drawLayerDirty = false;
+      drawPanDx = 0;
+      const pr0 = L.panes && L.panes[0];
+      drawCache = {
+        stable: stableDrawFingerprint(L, v),
+        right: v.right,
+        barW: v.barW,
+        lo: pr0 && pr0.lo,
+        hi: pr0 && pr0.hi,
+      };
       rebuildSpatial(L);
-      drawViewKey = layoutFingerprint(L, view());
+    }
+
+    function blitDrawLayer(L, dxCss) {
+      const dpr = window.devicePixelRatio || 1;
+      const pr = L.panes[0];
+      // 只在主圖繪圖區貼上，並依平移偏移
+      g.save();
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      const x0 = L.plotL * dpr, y0 = pr.top * dpr, w = L.plotW * dpr, h = pr.h * dpr;
+      g.beginPath(); g.rect(x0, y0, w, h); g.clip();
+      const ox = dxCss * dpr;
+      g.drawImage(drawLayer, x0, y0, w, h, x0 + ox, y0, w, h);
+      g.restore();
+    }
+
+    function paintLiveHlines(L, list) {
+      const pr = L.panes[0];
+      const hlines = [];
+      for (let idx = 0; idx < list.length; idx++) {
+        if (list[idx].type !== "hline") continue;
+        if (idx === selected) continue; // selected 走下面 live 路徑
+        hlines.push([list[idx], idx]);
+      }
+      if (!hlines.length) return;
+      L._measureCtx = g;
+      g.save();
+      g.beginPath(); g.rect(L.plotL, pr.top, L.plotW, pr.h); g.clip();
+      for (const [d, idx] of hlines) paintOneDrawing(g, d, idx, L, geom(d, L), false);
+      g.restore(); g.lineWidth = 1;
+      paintHlineLabels(g, L, hlines.map(x => x[0]));
     }
 
     function compositeDrawLayer(L) {
-      const fp = layoutFingerprint(L, view());
-      if (fp !== drawViewKey) drawLayerDirty = true;
-      if (drawLayerDirty) rebuildDrawLayer(L);
-      else if (spatialDirty) rebuildSpatial(L);
-      // 實體像素層直接貼上（避開目前的 dpr transform）
-      g.save();
-      g.setTransform(1, 0, 0, 1, 0, 0);
-      g.drawImage(drawLayer, 0, 0);
-      g.restore();
-      // pending／selected 每幀即時疊上，不進靜態快取
+      const v = view();
+      const stable = stableDrawFingerprint(L, v);
+      // barW／尺度／選取變更 → 重建；僅 right 變 → 平移快取
+      if (drawLayerDirty || stable !== drawCache.stable || v.barW !== drawCache.barW) {
+        rebuildDrawLayer(L);
+      } else {
+        drawPanDx = -(v.right - drawCache.right) * v.barW;
+        if (spatialDirty) rebuildSpatial(L);
+      }
+      blitDrawLayer(L, drawPanDx);
+
       const list = drawings();
+      // 水平線永遠依目前視窗即時畫（與平移無關）
+      paintLiveHlines(L, list);
+
+      // pending／selected 每幀即時疊上
       const live = [];
       if (selected >= 0 && list[selected]) live.push([list[selected], selected, false]);
       if (pending) live.push([pending, -1, true]);
@@ -1316,7 +1438,6 @@
         g.restore(); g.lineWidth = 1;
         if (selected >= 0 && list[selected] && list[selected].type === "hline") {
           const d = list[selected];
-          const pr = L.panes[0];
           const y = pr.yOf(d.pts[0].p);
           if (y > pr.top + 8 && y < pr.top + pr.h - 8) {
             const text = fmtP(d.pts[0].p);
@@ -1352,17 +1473,25 @@
     function hitTest(p) {
       if (!layout) return null;
       const list = drawings();
+      // 平移中空間索引仍是快取座標：把指標轉回快取空間
+      const q = (drawPanDx && Math.abs(drawPanDx) > 0.01) ? { x: p.x - drawPanDx, y: p.y } : p;
       if (drawLayerDirty || spatialDirty || !spatial.geoms || spatial.geoms.length !== list.length) {
         rebuildSpatial(layout);
       }
       if (selected >= 0 && list[selected]) {
-        const G = spatial.geoms[selected] || geom(list[selected], layout);
+        // selected 是即時幾何（目前視圖），用原始 p
+        const G = geom(list[selected], layout);
         const hk = G.handles.findIndex(h => Math.abs(h.x - p.x) <= 6 && Math.abs(h.y - p.y) <= 6);
         if (hk >= 0) return { idx: selected, handle: hk };
       }
+      // hline 不在快取／空間索引裡，用目前視圖即時測
+      for (let k = list.length - 1; k >= 0; k--) {
+        if (list[k].type !== "hline" || k === selected) continue;
+        if (hitGeom(p, geom(list[k], layout))) return { idx: k, handle: -1 };
+      }
       const { cell, cols, rows, buckets, geoms } = spatial;
-      const c = Math.max(0, Math.min(cols - 1, Math.floor(p.x / cell)));
-      const r = Math.max(0, Math.min(rows - 1, Math.floor(p.y / cell)));
+      const c = Math.max(0, Math.min(cols - 1, Math.floor(q.x / cell)));
+      const r = Math.max(0, Math.min(rows - 1, Math.floor(q.y / cell)));
       // 鄰近 3x3 cell，避免壓在邊界上漏打
       const cand = [];
       const seen = new Set();
@@ -1377,7 +1506,8 @@
       }
       cand.sort((a, b) => b - a);
       for (const k of cand) {
-        if (hitGeom(p, geoms[k])) return { idx: k, handle: -1 };
+        if (list[k] && list[k].type === "hline") continue;
+        if (hitGeom(q, geoms[k])) return { idx: k, handle: -1 };
       }
       return null;
     }
@@ -1506,6 +1636,7 @@
       if (wasBusy) {
         interactionBusy = false;
         invalidateSeriesMemo(); // 鬆手後補齊重指標
+        markDrawingsDirty();    // 平移結束重建畫線層（補齊移入視窗的邊緣）
       }
       if (pending && pending.dragging) {
         const p = local(e);
@@ -1798,7 +1929,7 @@
         }
         requestAnimationFrame(tick);
       });
-      if (interact === "pan") view().right = baseRight;
+      if (interact === "pan") { view().right = baseRight; markDrawingsDirty(); }
       interactionBusy = false;
       const elapsed = performance.now() - t0;
       return {
@@ -1820,12 +1951,24 @@
       /** 切換走勢圖分頁：tabId 不同時即使同代號也會重載該分頁的指標／畫線。 */
       setContext(ctx) {
         if (!ctx || !ctx.quote) return;
-        tabId = ctx.tabId || tabId;
-        period = PERIODS.some(p => p[0] === ctx.period) ? ctx.period : period;
+        // 離開分頁前先存一幀，回來可瞬切
+        if (tabId && quote) captureTabSnapshot(tabId);
+        const nextId = ctx.tabId || tabId;
+        const nextPeriod = PERIODS.some(p => p[0] === ctx.period) ? ctx.period : period;
+        const same = nextId === tabId && quote && quote.symbol === ctx.quote.symbol && nextPeriod === period;
+        tabId = nextId;
+        period = nextPeriod;
         quote = ctx.quote;
         loadEntry();
-        delete views[key()]; // 分頁／版面寬度改變時重算可視範圍，避免 K 線跑出畫面
-        closeMenus(); sync(); render();
+        // 保留每分頁 view 快取，切換不重算可視範圍（避免卡頓）
+        closeMenus(); sync();
+        ensureCanvasSize();
+        if (!same && blitTabSnapshot(tabId)) {
+          // 先畫快照，下一幀再重算指標／畫線
+          scheduleDeferredRender();
+        } else {
+          render();
+        }
       },
       getContext() { return { tabId, symbol: quote && quote.symbol, period }; },
       onMeta(cb) { metaCb = typeof cb === "function" ? cb : null; },

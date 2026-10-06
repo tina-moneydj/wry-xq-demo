@@ -77,9 +77,11 @@ fn main() -> wry::Result<()> {
         .filter(|value| value.is_object())
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".into());
+    let tab_stress = std::env::var_os("XQ_TAB_STRESS").is_some_and(|v| v != "0");
     let init_script = format!(
-        "window.XQ_STATE = {saved_state};{}",
-        if debug { " window.XQ_DEBUG = true;" } else { "" }
+        "window.XQ_STATE = {saved_state};{}{}",
+        if debug { " window.XQ_DEBUG = true;" } else { "" },
+        if tab_stress { " window.XQ_TAB_STRESS = true;" } else { "" }
     );
 
     // 1) 主 webview（先建立，在下層）。

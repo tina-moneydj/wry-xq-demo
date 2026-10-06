@@ -16,8 +16,12 @@
   /* ---- 分頁列（XQ 風格）---- */
   .tabbar { flex: none; display: flex; align-items: stretch; height: 26px; min-height: 26px; background: #161616;
     border-bottom: none; overflow: hidden; z-index: 5; position: relative; }
-  .tabbar-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+  .tabbar-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scroll-behavior: smooth; }
   .tabbar-tabs::-webkit-scrollbar { height: 0; }
+  /* 多走勢圖分頁：自動變窄，至少支援 16 個 */
+  .tab.compact { max-width: 92px; padding: 0 4px 0 6px; gap: 2px; font-size: 11px; }
+  .tab.compact .tclose { width: 12px; height: 12px; font-size: 10px; }
+  .tabbar.many .tab-add { flex: none; }
   .tab { display: flex; align-items: center; gap: 4px; padding: 0 8px 0 10px; max-width: 150px;
     background: var(--tab); border-right: 1px solid #252525; color: var(--dim); cursor: pointer;
     font-size: 12px; white-space: nowrap; flex: none; }
@@ -206,6 +210,8 @@
 <script>
 (() => {
   const HOME_URL = "https://www.twse.com.tw/zh/";
+  /** 上方走勢圖分頁軟上限（可同時開著，各自獨立代號／週期／畫線／指標） */
+  const MAX_CHART_TABS = 16;
   const QUOTES = [
     { symbol: "2330", name: "台積電",   price: 1035.0, change: +12.0 },
     { symbol: "2317", name: "鴻海",     price: 198.5,  change: -1.5 },
@@ -277,11 +283,12 @@
   function applyChartTab(tab) {
     if (!tab) return;
     const q = quoteBy(tab.symbol);
+    // setContext：有快照先貼上再延後重算；勿再同步 resize/render 以免卡頓
     chart.setContext({ tabId: tab.id, quote: q, period: tab.period || "D" });
     const up = q.change >= 0;
     document.getElementById("chart-title").innerHTML =
       `${q.symbol} ${q.name}　<span class="${up ? "up" : "down"}">${q.price.toFixed(2)}　${up ? "+" : ""}${q.change.toFixed(2)}</span>`;
-    chart.resize();
+    chart.resize({ defer: true });
   }
 
   // ---- 報價表 ----
@@ -437,16 +444,23 @@
     const bar = document.getElementById("tabbar-" + pane);
     const state = store.panes[pane];
     bar.innerHTML = "";
+    const nChart = pane === "top" ? chartTabCount() : state.tabs.length;
+    const compact = nChart >= 8;
+    bar.classList.toggle("many", nChart >= 8);
     const tabsEl = document.createElement("div");
     tabsEl.className = "tabbar-tabs";
+    let activeEl = null;
     state.tabs.forEach(tab => {
       const el = document.createElement("div");
-      el.className = "tab" + (tab.id === state.active ? " active" : "");
+      el.className = "tab" + (tab.id === state.active ? " active" : "") + (compact ? " compact" : "");
       el.dataset.id = tab.id;
       const lab = document.createElement("span");
       lab.className = "tlabel";
-      lab.textContent = tab.title || tab.kind;
-      lab.title = tab.title || "";
+      // 多頁時標題縮短：代號為主
+      lab.textContent = (compact && tab.kind === "chart" && tab.symbol)
+        ? tab.symbol
+        : (tab.title || tab.kind);
+      lab.title = tab.title || tab.symbol || "";
       const close = document.createElement("span");
       close.className = "tclose";
       close.textContent = "×";
@@ -455,19 +469,31 @@
       el.append(lab, close);
       el.addEventListener("click", () => activateTab(pane, tab.id));
       tabsEl.appendChild(el);
+      if (tab.id === state.active) activeEl = el;
     });
     const add = document.createElement("button");
     add.type = "button";
     add.className = "tab-add";
     add.textContent = "+";
-    add.title = "新增分頁";
+    if (pane === "top") {
+      add.title = chartTabCount() >= MAX_CHART_TABS
+        ? `走勢圖分頁上限 ${MAX_CHART_TABS}`
+        : `新增走勢圖（${chartTabCount()}/${MAX_CHART_TABS}）`;
+      add.disabled = chartTabCount() >= MAX_CHART_TABS;
+    } else {
+      add.title = "新增分頁";
+    }
     add.addEventListener("click", e => {
       e.stopPropagation();
       e.preventDefault();
+      if (add.disabled) return;
       openAddMenu(pane, add);
     });
     add.addEventListener("mousedown", e => e.stopPropagation());
     bar.append(tabsEl, add);
+    if (activeEl) {
+      try { activeEl.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (_) {}
+    }
   }
 
   function openAddMenu(pane, anchor) {
@@ -506,14 +532,31 @@
     menu.style.top = (r.bottom + 2) + "px";
   }
 
-  function addChartTab(symbol) {
+  function chartTabCount() {
+    return (store.panes.top.tabs || []).filter(t => t.kind === "chart").length;
+  }
+  function addChartTab(symbol, opts) {
+    opts = opts || {};
+    if (chartTabCount() >= MAX_CHART_TABS) {
+      if (!opts.silent) {
+        console.warn(`走勢圖分頁已達上限 ${MAX_CHART_TABS}`);
+        if (window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg: `chart tabs at cap ${MAX_CHART_TABS}` }));
+      }
+      return null;
+    }
     const q = quoteBy(symbol);
-    const tab = { id: uid("chart"), kind: "chart", title: `${q.symbol} ${q.name}`, symbol: q.symbol, period: "D" };
+    const period = opts.period || "D";
+    const tab = {
+      id: uid("chart"), kind: "chart",
+      title: `${q.symbol} ${q.name}`,
+      symbol: q.symbol, period,
+    };
     store.panes.top.tabs.push(tab);
     store.panes.top.active = tab.id;
     save();
     renderTabbar("top");
     applyChartTab(tab);
+    return tab;
   }
   function addLeftTab(kind, title) {
     const tab = { id: uid(kind), kind, title, text: kind === "note" ? "" : undefined };
@@ -693,6 +736,86 @@
   applyLayout();
   window.addEventListener("load", applyLayout);
   setTimeout(() => { renderTabbar("top"); renderTabbar("left"); renderTabbar("right"); applyLayout(); }, 50);
+
+  /** 一次開滿走勢圖分頁（測試／壓力用），各自獨立狀態鍵 tabId|symbol|period */
+  window.__openManyChartTabs = function (n) {
+    n = Math.min(MAX_CHART_TABS, Math.max(1, n || MAX_CHART_TABS));
+    // 清到只留一頁再重建，避免測試殘留
+    while (store.panes.top.tabs.length > 1) {
+      closeTab("top", store.panes.top.tabs[store.panes.top.tabs.length - 1].id);
+    }
+    const syms = QUOTES.map(q => q.symbol);
+    const periods = ["D", "W", "M", "T"];
+    // 第一頁改成第一檔
+    const first = store.panes.top.tabs[0];
+    first.kind = "chart";
+    first.symbol = syms[0];
+    first.period = "D";
+    first.title = `${quoteBy(syms[0]).symbol} ${quoteBy(syms[0]).name}`;
+    store.panes.top.active = first.id;
+    applyChartTab(first);
+    for (let i = 1; i < n; i++) {
+      addChartTab(syms[i % syms.length], { period: periods[i % periods.length], silent: true });
+    }
+    renderTabbar("top");
+    return {
+      max: MAX_CHART_TABS,
+      opened: chartTabCount(),
+      tabs: store.panes.top.tabs.map(t => ({ id: t.id, symbol: t.symbol, period: t.period })),
+    };
+  };
+  window.__benchChartTabs = async function () {
+    const report = (obj) => {
+      const msg = "TABPERF|" + JSON.stringify(obj);
+      if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(JSON.stringify({ type: "log", msg }));
+      console.log(msg);
+    };
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const opened = window.__openManyChartTabs(MAX_CHART_TABS);
+    report({ phase: "opened", ...opened });
+    await sleep(300);
+    // 暖身：每頁先完整 render 一次，產生快照
+    for (const t of store.panes.top.tabs) {
+      activateTab("top", t.id);
+      if (chart && chart.render) chart.render();
+      await sleep(40);
+    }
+    const paintTimes = [];
+    const settleTimes = [];
+    for (const t of store.panes.top.tabs) {
+      const t0 = performance.now();
+      activateTab("top", t.id); // 應先貼快照
+      paintTimes.push(+(performance.now() - t0).toFixed(2));
+      await sleep(50); // 等 deferred render
+      settleTimes.push(+(performance.now() - t0).toFixed(2));
+    }
+    const stats = (arr) => {
+      const a = arr.slice().sort((x, y) => x - y);
+      const avg = a.reduce((s, v) => s + v, 0) / a.length;
+      return {
+        avgMs: +avg.toFixed(2),
+        p50Ms: a[Math.floor(a.length * 0.5)],
+        p95Ms: a[Math.floor(a.length * 0.95)],
+        maxMs: a[a.length - 1],
+      };
+    };
+    report({
+      phase: "done",
+      tabs: paintTimes.length,
+      paintFirst: stats(paintTimes),
+      settle: stats(settleTimes),
+      note: "paintFirst=setContext/snapshot path; settle includes deferred full render",
+    });
+    return { paintTimes, settleTimes };
+  };
+  if (window.XQ_TAB_STRESS) {
+    setTimeout(() => {
+      window.__benchChartTabs().catch(err => {
+        if (window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg: "TABPERF|ERROR|" + String(err && err.stack || err) }));
+      });
+    }, 1000);
+  }
+
   window.setMemStats = function (info) {
     try {
       const rssEl = document.getElementById("mem-rss");
