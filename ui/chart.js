@@ -474,8 +474,12 @@
     const host = toolbar.parentElement;       // #top（選單掛在這裡）
     const wrap = canvas.parentElement;        // #chart-stage（文字輸入框掛在這裡；左側為 draw-rail）
     const cache = {}, views = {};
-    const MAX_SERIES_CACHE = 48; // ≥16 分頁 × 多週期；超出淘汰最舊
+    // 作用中分頁全量保溫；其餘只留上一頁 bars（無 memo），背景代號可重建
+    const MAX_SERIES_CACHE = 12;
+    const MAX_TAB_SNAPS = 16; // ≤16 分頁 paint-first
+    const SNAP_SCALE = 0.5; // 非作用中快照半解析度，省像素記憶體
     const cacheOrder = [];
+    let warmPrevKey = null; // 上一作用中序列鍵（bars 保溫、memo 已清）
     function touchCacheKey(k) {
       const i = cacheOrder.indexOf(k);
       if (i >= 0) cacheOrder.splice(i, 1);
@@ -484,6 +488,36 @@
         const old = cacheOrder.shift();
         if (old && old !== k) { delete cache[old]; delete views[old]; }
       }
+    }
+    function seriesKeyParts(k) {
+      if (!k) return null;
+      const parts = k.split("|");
+      if (parts.length === 2) return { kind: "daily", symbol: parts[0], period: parts[1] };
+      if (parts.length >= 3) return { kind: "tab", tabId: parts[0], symbol: parts[1], period: parts[2] };
+      return null;
+    }
+    /** 只保留作用中序列（含 memo）+ 上一頁 bars；其餘代號／週期整筆丟棄以便重建 */
+    function releaseInactiveSeries(activeKey) {
+      const keepFull = new Set();
+      const keepBars = new Set();
+      if (activeKey) keepFull.add(activeKey);
+      if (quote) keepFull.add(quote.symbol + "|D");
+      if (warmPrevKey && warmPrevKey !== activeKey) {
+        keepBars.add(warmPrevKey);
+        const p = seriesKeyParts(warmPrevKey);
+        if (p && p.symbol) keepBars.add(p.symbol + "|D");
+      }
+      for (const k of Object.keys(cache)) {
+        if (keepFull.has(k)) continue;
+        if (keepBars.has(k)) {
+          if (cache[k]) cache[k].memo = {};
+          continue;
+        }
+        delete cache[k];
+        delete views[k];
+      }
+      cacheOrder.length = 0;
+      for (const k of Object.keys(cache)) cacheOrder.push(k);
     }
     let tabId = "chart-1", quote = null;
     let period = PERIODS.some(p => p[0] === store.ui.period) ? store.ui.period : "D";
@@ -513,16 +547,17 @@
         snap = { canvas: c, ctx: c.getContext("2d"), cssW: 0, cssH: 0 };
         tabSnaps.set(id, snap);
       }
-      const w = canvas.width, h = canvas.height;
+      // 半解析度：切回時一瞬模糊可接受，顯著降低離屏 canvas 佔用
+      const w = Math.max(1, Math.round(canvas.width * SNAP_SCALE));
+      const h = Math.max(1, Math.round(canvas.height * SNAP_SCALE));
       if (snap.canvas.width !== w || snap.canvas.height !== h) {
         snap.canvas.width = w; snap.canvas.height = h;
       }
       snap.ctx.setTransform(1, 0, 0, 1, 0, 0);
       snap.ctx.clearRect(0, 0, w, h);
-      try { snap.ctx.drawImage(canvas, 0, 0); } catch (_) { return; }
+      try { snap.ctx.drawImage(canvas, 0, 0, w, h); } catch (_) { return; }
       snap.cssW = cssW; snap.cssH = cssH;
-      // 軟上限：與分頁數對齊
-      while (tabSnaps.size > 24) {
+      while (tabSnaps.size > MAX_TAB_SNAPS) {
         const oldest = tabSnaps.keys().next().value;
         if (oldest === id) break;
         tabSnaps.delete(oldest);
@@ -535,7 +570,7 @@
       const dpr = window.devicePixelRatio || 1;
       g.setTransform(1, 0, 0, 1, 0, 0);
       g.clearRect(0, 0, canvas.width, canvas.height);
-      g.drawImage(snap.canvas, 0, 0);
+      g.drawImage(snap.canvas, 0, 0, canvas.width, canvas.height);
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       return true;
     }
@@ -791,9 +826,14 @@
       canvas.style.cursor = pan ? "grabbing" : drag ? "move" : (tool === "cursor" ? "crosshair" : "crosshair");
     }
     function setPeriod(id) {
+      const leaving = quote ? key() : null;
       period = id; store.ui.period = id; save();
       if (quote) loadEntry();
       if (metaCb) metaCb({ tabId, symbol: quote && quote.symbol, period });
+      if (leaving && leaving !== key()) {
+        warmPrevKey = leaving;
+        releaseInactiveSeries(key());
+      }
       closeMenus(); sync(); render();
     }
     function deleteSelected() {
@@ -1955,7 +1995,10 @@
       },
       setQuote(q) {
         if (quote && quote.symbol === q.symbol) return;
-        quote = q; loadEntry(); closeMenus(); sync(); render();
+        const leaving = quote ? key() : null;
+        quote = q; loadEntry(); closeMenus(); sync();
+        if (leaving) { warmPrevKey = leaving; releaseInactiveSeries(key()); }
+        render();
       },
       /** 同商品高頻報價／最後一根 K 更新（不重載分頁狀態、不強制重建畫線層）。 */
       updateQuote(tick) { return applyTick(tick || {}); },
@@ -1963,6 +2006,7 @@
       setContext(ctx) {
         if (!ctx || !ctx.quote) return;
         // 離開分頁前先存一幀，回來可瞬切
+        const leavingKey = (tabId && quote) ? key() : null;
         if (tabId && quote) captureTabSnapshot(tabId);
         const nextId = ctx.tabId || tabId;
         const nextPeriod = PERIODS.some(p => p[0] === ctx.period) ? ctx.period : period;
@@ -1974,6 +2018,10 @@
         // 保留每分頁 view 快取，切換不重算可視範圍（避免卡頓）
         closeMenus(); sync();
         ensureCanvasSize();
+        if (!same) {
+          if (leavingKey) warmPrevKey = leavingKey;
+          releaseInactiveSeries(key());
+        }
         if (!same && blitTabSnapshot(tabId)) {
           // 先畫快照，下一幀再重算指標／畫線
           scheduleDeferredRender();
@@ -1982,6 +2030,31 @@
         }
       },
       getContext() { return { tabId, symbol: quote && quote.symbol, period }; },
+      /** 診斷：序列／快照佔用（開發用） */
+      __memStats() {
+        let memoKeys = 0, bars = 0;
+        const keys = Object.keys(cache);
+        for (const k of keys) {
+          const s = cache[k];
+          if (!s) continue;
+          bars += (s.bars && s.bars.length) || 0;
+          memoKeys += s.memo ? Object.keys(s.memo).length : 0;
+        }
+        let snapPx = 0;
+        for (const snap of tabSnaps.values()) {
+          if (snap && snap.canvas) snapPx += (snap.canvas.width || 0) * (snap.canvas.height || 0);
+        }
+        return {
+          series: keys.length,
+          seriesKeys: keys.slice(),
+          memoKeys,
+          bars,
+          snaps: tabSnaps.size,
+          snapPx,
+          warmPrevKey,
+          active: quote ? key() : null,
+        };
+      },
       onMeta(cb) { metaCb = typeof cb === "function" ? cb : null; },
       resize,
       render,

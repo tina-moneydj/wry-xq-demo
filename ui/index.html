@@ -1375,6 +1375,7 @@
       settle: stats(settleTimes),
       note: "paintFirst=setContext/snapshot path; settle includes deferred full render",
     });
+    if (chart && chart.__memStats) report({ phase: "mem", ...chart.__memStats() });
     return { paintTimes, settleTimes };
   };
   if (window.XQ_TAB_STRESS) {
