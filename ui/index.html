@@ -242,7 +242,7 @@
         <span class="grow"></span>
         <button id="home" type="button">首頁</button>
       </div>
-      <div id="web-slot"><div class="hint">網頁載入中…</div></div>
+      <div id="web-slot"><div class="hint">網頁分頁未載入（切回分頁會重新載入）</div></div>
     </section>
   </section>
   <div id="status-bar" title="記憶體／FPS 約每秒更新；不走行情 tick 熱路徑">
@@ -485,6 +485,7 @@
         wtab.url = `https://tw.stock.yahoo.com/quote/${q.symbol}.TW`;
         wtab.title = q.symbol;
         renderTabbar("right");
+        webChildTabId = wtab.id;
         send({ type: "open", url: wtab.url });
         setWebUrlDisplay(wtab.url);
       }
@@ -730,8 +731,10 @@
     }
   });
 
-  // ---- 網頁分頁 ----
+  // ---- 網頁分頁（子 webview 僅載入作用中分頁；切走 about:blank 卸載）----
   let suppressUrlWrite = false;
+  /** 子 webview 目前載入內容對應的分頁 id；null = 已卸載（about:blank） */
+  let webChildTabId = null;
   function setWebUrlDisplay(url) {
     const el = document.getElementById("web-url");
     el.textContent = url;
@@ -749,7 +752,16 @@
       return u.hostname.replace(/^www\./, "");
     } catch (_) { return "網頁"; }
   }
+  /** 卸載子 webview 重頁面，分頁 metadata／URL 仍留在 store */
+  function unloadChildWeb() {
+    if (webChildTabId == null) return;
+    webChildTabId = null;
+    suppressUrlWrite = true;
+    send({ type: "open", url: "about:blank" });
+    setTimeout(() => { suppressUrlWrite = false; }, 500);
+  }
   window.setWebUrl = url => {
+    if (!url || url === "about:blank" || String(url).startsWith("about:")) return;
     setWebUrlDisplay(url);
     if (suppressUrlWrite) return;
     const tab = store.panes.right.tabs.find(t => t.id === store.panes.right.active);
@@ -765,9 +777,13 @@
   };
   function activateWebTab(tab) {
     if (!tab) return;
-    setWebUrlDisplay(tab.url || HOME_URL);
+    const url = tab.url || HOME_URL;
+    setWebUrlDisplay(url);
+    // 同一分頁已載入則略過，避免切回重抓
+    if (webChildTabId === tab.id) return;
     suppressUrlWrite = true;
-    send({ type: "open", url: tab.url || HOME_URL });
+    webChildTabId = tab.id;
+    send({ type: "open", url });
     setTimeout(() => { suppressUrlWrite = false; }, 800);
   }
   document.getElementById("home").addEventListener("click", () => {
@@ -776,6 +792,7 @@
       tab.url = HOME_URL;
       tab.title = "證交所";
       save(); renderTabbar("right");
+      webChildTabId = tab.id;
     }
     send({ type: "home" });
     setWebUrlDisplay(HOME_URL);
@@ -923,6 +940,7 @@
     store.panes.right.active = tab.id;
     save();
     renderTabbar("right");
+    unloadChildWeb();
     activateWebTab(tab);
   }
 
@@ -948,7 +966,11 @@
     renderTabbar(pane);
     if (pane === "top") applyChartTab(tab);
     else if (pane === "left") applyLeftTab(tab);
-    else if (pane === "right") activateWebTab(tab);
+    else if (pane === "right") {
+      // 切走先卸載，再載入作用中分頁（釋放 Yahoo 等重站 WebKit 記憶體）
+      if (!same) unloadChildWeb();
+      activateWebTab(tab);
+    }
   }
 
   function applyLeftTab(tab) {

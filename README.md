@@ -16,7 +16,7 @@ XQ 風格桌面示範：Rust（**tao** 視窗 + **wry** WebView）開原生視�
 |------|------|
 | **上** 走勢圖 | 獨立圖表分頁，軟上限 **16**；各分頁自有代號／週期／畫線／指標（鍵：`tabId\|symbol\|period`） |
 | **左下** | **報價**、**自選**、**組合**（虛擬化大表）、**記事**（可多開） |
-| **右下** 網頁 | 多個網頁分頁共用同一個子 WebView；切換時載入該分頁記住的網址 |
+| **右下** 網頁 | 多個網頁分頁共用同一個子 WebView；**僅作用中分頁**載入網址，切走導向 `about:blank` 卸載（釋放 Yahoo 等重站記憶體），分頁仍記 URL，切回再載入 |
 
 分割線可水平／垂直拖拉；點報價可同步上方圖表與右下網頁。
 
@@ -66,11 +66,15 @@ XQ 風格桌面示範：Rust（**tao** 視窗 + **wry** WebView）開原生視�
 
 ```bash
 cargo run
-# 或
+# 建議日常／測記憶體用 Release（比 debug 明顯省 CPU／RSS）
 cargo run --release
 ```
 
 選用環境變數：`XQ_DEBUG=1`（ipc 除錯）、`XQ_TAB_STRESS=1`（16 走勢圖分頁切換壓測）、`XQ_GROUP_STRESS=1`（組合表 5 萬列壓測）。
+
+### 記憶體：右下網頁卸載
+
+子 WebView 同時只常駐**一個**作用中網頁分頁。切到其他網頁分頁時會先 `about:blank` 再載入新頁，讓 WebKit 釋放前一頁（例如 Yahoo 奇摩可省約數百 MB RSS）。分頁標題與 URL 仍寫在 `state.json`，切回會重新載入。雙 WebView 架構不變。
 
 標題列可選「假資料」或「Engine」。假資料不向 XQNext 訂閱；Engine 的報價與分時來自 XQNext（經本機 WryFeedHost），日 K 仍是合成的，最後一根跟著現價。
 
