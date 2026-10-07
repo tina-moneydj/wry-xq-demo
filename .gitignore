@@ -3,3 +3,6 @@
 !docs/screenshot.png
 feedhost/**/bin/
 feedhost/**/obj/
+installer/staging/
+dist/*
+!dist/.gitkeep

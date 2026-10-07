@@ -1,0 +1,19 @@
+﻿XQ 風格測試（wry-xq-demo）安裝說明
+====================================
+
+系統需求
+--------
+• Windows 10／11（64 位元）
+• Microsoft Edge WebView2 執行階段（Windows 10／11 多半已內建）
+  若啟動後無畫面，請安裝 WebView2 Runtime 永久版：
+  https://developer.microsoft.com/microsoft-edge/webview2/
+
+安裝後
+------
+• 開始功能表捷徑：「XQ 風格測試」
+• 可選桌面捷徑（安裝精靈中勾選）
+• 右下網頁分頁預設為空白（about:blank），不會一啟動就載入外部網站
+
+即時行情
+--------
+接 XQNext Engine 請另於 Windows 編譯並執行 feedhost（見專案 feedhost/README.md）。

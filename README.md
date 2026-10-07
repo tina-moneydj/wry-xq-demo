@@ -117,6 +117,18 @@ dotnet run --project feedhost/WryFeedHost -c Release -- --demo-ticks
 
 清楚標示為 **path-test**，推送合成高頻二進位報價／分鐘線，**不是**嘉實即時行情。
 
+
+## Windows 安裝檔
+
+Inno Setup 繁中安裝程式腳本與打包說明見 [installer/README.md](installer/README.md)。
+
+```bash
+# Linux：交叉編譯 x86_64-pc-windows-gnu + Wine 編譯 Inno → dist/wry-xq-demo-setup-0.1.0.exe
+./scripts/package-windows.sh
+```
+
+正式發佈建議在 Windows 用 MSVC 編譯後再跑同一腳本（或手動開 `installer/wry-xq-demo.iss`）。安裝後右下網頁分頁預設仍為空白（`about:blank`）。
+
 ## 文件
 
 - [效能設計原則](docs/performance-principles.md) — HFT 看盤心態、增量更新、虛擬化、畫線／分頁快取、壓測數字與檢查清單。
