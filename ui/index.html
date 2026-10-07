@@ -124,6 +124,49 @@
   .watch-toolbar input { flex: 1; background: #111; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 3px 6px; font: inherit; }
   .watch-toolbar button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 3px; font: inherit; padding: 2px 8px; cursor: pointer; }
 
+
+  /* ---- 組合／虛擬報價表 ---- */
+  #body-group { position: relative; }
+  .xq-wl { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
+  .xq-wl-toolbar { flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 6px;
+    border-bottom: 1px solid var(--line); background: #191919; }
+  .xq-wl-toolbar select, .xq-wl-btn { background: #2a2a2a; color: var(--text); border: 1px solid #444;
+    border-radius: 3px; font: inherit; font-size: 12px; padding: 2px 6px; height: 24px; cursor: pointer; }
+  .xq-wl-toolbar select { max-width: 140px; }
+  .xq-wl-btn:hover { background: #363636; }
+  .xq-wl-meta { color: var(--dim); font-size: 11px; margin-left: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .xq-wl-head { flex: none; height: 26px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--pane); position: relative; }
+  .xq-wl-head-inner { position: relative; height: 100%; }
+  .xq-wl-th { position: absolute; top: 0; height: 100%; display: flex; align-items: center; padding: 0 6px;
+    color: var(--dim); font-size: 12px; border-right: 1px solid #2a2a2a; box-sizing: border-box; user-select: none; }
+  .xq-wl-resize { position: absolute; right: 0; top: 0; width: 5px; height: 100%; cursor: col-resize; }
+  .xq-wl-body { flex: 1; overflow: auto; position: relative; min-height: 0; }
+  .xq-wl-spacer { position: absolute; left: 0; top: 0; width: 1px; pointer-events: none; }
+  .xq-wl-rows { position: absolute; left: 0; top: 0; right: 0; }
+  .xq-wl-row { position: absolute; left: 0; height: 24px; width: 100%; cursor: pointer; }
+  .xq-wl-row:hover { background: #222; }
+  .xq-wl-row.sel { background: var(--sel); }
+  .xq-wl-td { position: absolute; top: 0; height: 100%; display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 6px; font-size: 12px; font-variant-numeric: tabular-nums; border-right: 1px solid #222; box-sizing: border-box;
+    overflow: hidden; white-space: nowrap; }
+  .xq-wl-td.left { justify-content: flex-start; }
+  .xq-wl-td.up { color: var(--up); } .xq-wl-td.down { color: var(--down); }
+  .xq-wl-dialog { position: absolute; inset: 0; z-index: 40; background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center; padding: 12px; }
+  .xq-wl-dialog[hidden] { display: none !important; }
+  .xq-wl-dlg { background: #1d1d1d; border: 1px solid #444; border-radius: 6px; padding: 12px; width: min(420px, 100%);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+  .xq-wl-dlg-wide { width: min(560px, 100%); }
+  .xq-wl-dlg-title { margin-bottom: 8px; color: #ddd; font-size: 13px; }
+  .xq-wl-dlg-hint { color: var(--dim); font-size: 11px; margin: 4px 0 8px; white-space: pre-wrap; }
+  .xq-wl-dlg-ta { width: 100%; height: 140px; background: #111; color: #ddd; border: 1px solid #444;
+    border-radius: 3px; font: 12px/1.4 ui-monospace, monospace; padding: 6px; resize: vertical; }
+  .xq-wl-dlg-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; flex-wrap: wrap; }
+  .xq-wl-dlg-actions button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 3px;
+    font: inherit; padding: 4px 10px; cursor: pointer; }
+  .xq-wl-dlg-actions button:hover { background: #363636; }
+  body.xq-wl-resizing, body.xq-wl-resizing * { cursor: col-resize !important; user-select: none !important; }
+
   #status-bar {
     flex: none; height: 22px; display: flex; align-items: center; gap: 12px;
     padding: 0 10px; background: #1a1a1a; border-top: 1px solid var(--line);
@@ -176,6 +219,11 @@
           </table>
         </div>
       </div>
+
+      <div class="pane-body" id="body-group" hidden>
+        <div id="group-watchlist" class="xq-wl"></div>
+        <div class="note">組合表：列／欄虛擬化；高頻更新只重繪可見格。合成 5 萬檔不寫入 state.json。</div>
+      </div>
       <div class="pane-body" id="body-note" hidden>
         <textarea id="note-editor" placeholder="記事（自動儲存）…"></textarea>
       </div>
@@ -207,6 +255,7 @@
   });
 </script>
 <script>/*__CHART_JS__*/</script>
+<script>/*__WATCHLIST_JS__*/</script>
 <script>
 (() => {
   const HOME_URL = "https://www.twse.com.tw/zh/";
@@ -228,6 +277,7 @@
   store.ui = store.ui && typeof store.ui === "object" ? store.ui : {};
   if (!store.panes || typeof store.panes !== "object") store.panes = {};
   if (!Array.isArray(store.watchlist)) store.watchlist = ["2330", "2317"];
+  if (!store.groups || typeof store.groups !== "object") store.groups = {};
   let saveTimer = 0;
   function save() {
     clearTimeout(saveTimer);
@@ -262,6 +312,11 @@
         else if (!p.tabs.some(t => t.id === p.active)) p.active = p.tabs[0].id;
       }
     }
+    // 左欄：若尚無「組合」分頁則補上（不搶走目前作用中分頁）
+    const left = store.panes.left;
+    if (left && !left.tabs.some(t => t.kind === "group")) {
+      left.tabs.push({ id: uid("group"), kind: "group", title: "組合" });
+    }
   }
   ensurePanes();
 
@@ -291,7 +346,42 @@
     chart.resize({ defer: true });
   }
 
-  // ---- 報價表 ----
+  // ---- 組合（虛擬化報價表）----
+  const groupHost = document.getElementById("group-watchlist");
+  const groupWl = window.XQWatchlist && groupHost ? window.XQWatchlist.create(groupHost, {
+    initialSymbols: store.watchlist.slice(),
+    quoteLookup: (sym) => {
+      const q = QUOTES.find(x => x.symbol === sym);
+      return q || { symbol: sym, name: sym, price: 100 + (sym.charCodeAt(0) % 50), change: 0 };
+    },
+    state: store.groups,
+    onSave: (shape) => {
+      // 只存結構：欄位／組合 meta；合成 5 萬檔不落地
+      store.groups = shape;
+      // 可編輯「自選」組合同步舊 watchlist，方便兩邊一致
+      const w = (shape.groups || []).find(g => g.id === "g-watch" && Array.isArray(g.symbols));
+      if (w) store.watchlist = w.symbols.slice();
+      save();
+    },
+    onSelect: (row) => {
+      const qi = QUOTES.findIndex(x => x.symbol === row.symbol);
+      if (qi >= 0) selectQuote(qi);
+      else {
+        // 合成代號：仍切走勢圖到近似示範股
+        const ctab = store.panes.top.tabs.find(t => t.id === store.panes.top.active);
+        if (ctab) {
+          const q = quoteBy(row.symbol);
+          ctab.symbol = q.symbol;
+          ctab.title = `${q.symbol} ${q.name}`;
+          applyChartTab(ctab);
+          renderTabbar("top");
+          save();
+        }
+      }
+    },
+  }) : null;
+
+    // ---- 報價表 ----
   let selectedQuote = 0;
   const rows = document.getElementById("quote-rows");
   function renderQuotes() {
@@ -513,6 +603,7 @@
         ? [
             { label: "報價", action: () => addLeftTab("quotes", "報價") },
             { label: "自選", action: () => addLeftTab("watch", "自選") },
+            { label: "組合", action: () => addLeftTab("group", "組合") },
             { label: "記事", action: () => addLeftTab("note", "記事") },
           ]
         : [
@@ -603,8 +694,10 @@
   function applyLeftTab(tab) {
     document.getElementById("body-quotes").hidden = tab.kind !== "quotes";
     document.getElementById("body-watch").hidden = tab.kind !== "watch";
+    document.getElementById("body-group").hidden = tab.kind !== "group";
     document.getElementById("body-note").hidden = tab.kind !== "note";
     if (tab.kind === "watch") renderWatch();
+    if (tab.kind === "group" && groupWl) groupWl.resize();
     if (tab.kind === "note") loadNoteTab(tab);
   }
 
@@ -623,6 +716,7 @@
     const leftW = clamp(Math.round(totalW * leftRatio), MIN_LEFT, Math.max(MIN_LEFT, totalW - MIN_RIGHT));
     left.style.width = leftW + "px";
     chart.resize();
+    if (groupWl) groupWl.resize();
     reportBounds();
   }
   const overlay = document.createElement("div");
@@ -814,6 +908,43 @@
         if (window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg: "TABPERF|ERROR|" + String(err && err.stack || err) }));
       });
     }, 1000);
+  }
+
+
+  window.__benchGroupWatchlist = async function () {
+    const report = (obj) => {
+      const msg = "GROUPPERF|" + JSON.stringify(obj);
+      if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(JSON.stringify({ type: "log", msg }));
+      console.log(msg);
+    };
+    if (!groupWl) {
+      report({ phase: "error", msg: "watchlist not ready" });
+      return null;
+    }
+    // 切到組合分頁
+    let tab = store.panes.left.tabs.find(t => t.kind === "group");
+    if (!tab) {
+      addLeftTab("group", "組合");
+      tab = store.panes.left.tabs.find(t => t.kind === "group");
+    }
+    activateTab("left", tab.id);
+    await new Promise(r => setTimeout(r, 200));
+    const result = await groupWl.bench({
+      rows: 50000,
+      cols: 40,
+      tickHz: 3000,
+      tickMs: 2000,
+      scrollMs: 2000,
+      report,
+    });
+    return result;
+  };
+  if (window.XQ_GROUP_STRESS) {
+    setTimeout(() => {
+      window.__benchGroupWatchlist().catch(err => {
+        if (window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg: "GROUPPERF|ERROR|" + String(err && err.stack || err) }));
+      });
+    }, 1200);
   }
 
   window.setMemStats = function (info) {

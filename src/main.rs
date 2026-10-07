@@ -20,6 +20,7 @@ const HOME_URL: &str = "https://www.twse.com.tw/zh/";
 const UI_HTML: &str = include_str!("../ui/index.html");
 // with_html 不能載入相對路徑的檔案，所以把走勢圖程式直接塞進 HTML 裡。
 const CHART_JS: &str = include_str!("../ui/chart.js");
+const WATCHLIST_JS: &str = include_str!("../ui/watchlist.js");
 
 /// 主 webview 送來的訊息（JSON）。
 #[derive(Debug, Deserialize)]
@@ -78,10 +79,12 @@ fn main() -> wry::Result<()> {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".into());
     let tab_stress = std::env::var_os("XQ_TAB_STRESS").is_some_and(|v| v != "0");
+    let group_stress = std::env::var_os("XQ_GROUP_STRESS").is_some_and(|v| v != "0");
     let init_script = format!(
-        "window.XQ_STATE = {saved_state};{}{}",
+        "window.XQ_STATE = {saved_state};{}{}{}",
         if debug { " window.XQ_DEBUG = true;" } else { "" },
-        if tab_stress { " window.XQ_TAB_STRESS = true;" } else { "" }
+        if tab_stress { " window.XQ_TAB_STRESS = true;" } else { "" },
+        if group_stress { " window.XQ_GROUP_STRESS = true;" } else { "" }
     );
 
     // 1) 主 webview（先建立，在下層）。
@@ -89,7 +92,11 @@ fn main() -> wry::Result<()> {
     let main_builder = WebViewBuilder::new()
             .with_bounds(full_window_rect(&window))
             .with_initialization_script(&init_script)
-            .with_html(UI_HTML.replace("/*__CHART_JS__*/", CHART_JS))
+            .with_html(
+                UI_HTML
+                    .replace("/*__CHART_JS__*/", CHART_JS)
+                    .replace("/*__WATCHLIST_JS__*/", WATCHLIST_JS),
+            )
             .with_ipc_handler(move |request| {
                 match serde_json::from_str::<IpcMessage>(request.body()) {
                     Ok(message) => {
