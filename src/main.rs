@@ -1,7 +1,7 @@
 // XQ 風格的測試程式：Rust (tao) 開視窗，裡面放兩個 webview。
 // - 主 webview：鋪滿整個視窗，用 HTML/CSS/JS 畫出走勢圖、報價、分割線。
 // - 子 webview：疊在右下格上面，載入真正的網站（不受 X-Frame-Options 限制）。
-//   僅作用中網頁分頁載入；切走時 about:blank 卸載以釋放記憶體，分頁仍記 URL。
+//   網頁分頁切走後延遲卸載／載入（保暖）；占位遮罩減少白閃；逾時再釋放 RSS。
 // 網頁 JS 會把右下格的位置用 window.ipc.postMessage 傳回來，Rust 再呼叫 set_bounds。
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -36,7 +36,7 @@ enum IpcMessage {
     Quote { symbol: String },
     /// 回到首頁。
     Home,
-    /// 在右下子 webview 開啟指定網址（分頁切換、新分頁用）；`about:blank` 表示卸載。
+    /// 在右下子 webview 開啟指定網址（分頁切換、延遲卸載後載入）；`about:blank` 表示卸載。
     Open { url: String },
     /// 除錯訊息（XQ_DEBUG=1 時 JS 才會送），印到 stderr。
     Log { msg: String },
@@ -301,7 +301,7 @@ fn main() -> wry::Result<()> {
                 let _ = web_view.load_url(HOME_URL);
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Open { url })) => {
-                // about:blank = 卸載非作用中／切走分頁，釋放 WebKit 重頁面記憶體
+                // about:blank = 延遲卸載後釋放 WebKit 記憶體；其餘為分頁 URL
                 if url == "about:blank" || url.starts_with("https://") || url.starts_with("http://") {
                     let _ = web_view.load_url(&url);
                 }
@@ -312,11 +312,11 @@ fn main() -> wry::Result<()> {
                 }
             }
             Event::UserEvent(UserEvent::ChildLoaded(url)) => {
-                // 卸載時不回寫 URL 列／state（JS 也會忽略 about:blank）
-                if url != "about:blank" && !url.starts_with("about:") {
-                    let json = serde_json::to_string(&url).unwrap_or_else(|_| "\"\"".into());
-                    let _ = main_view.evaluate_script(&format!("window.setWebUrl && window.setWebUrl({json});"));
-                }
+                // 含 about:blank：通知 JS 收起／維持深色占位，避免白閃；非 about 再回寫 URL
+                let json = serde_json::to_string(&url).unwrap_or_else(|_| "\"\"".into());
+                let _ = main_view.evaluate_script(&format!(
+                    "window.onChildLoaded && window.onChildLoaded({json});"
+                ));
             }
             Event::UserEvent(UserEvent::MemStats { rss_mb, rss_max_mb, cpu_pct }) => {
                 let script = format!(

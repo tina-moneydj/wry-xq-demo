@@ -98,8 +98,22 @@
   #bottom { flex: 1; display: flex; min-height: 0; }
   #left { flex: none; display: flex; flex-direction: column; min-width: 0; background: var(--pane); position: relative; }
   #right { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #101010; position: relative; }
-  #web-slot { flex: 1; position: relative; min-height: 0; }
+  #web-slot { flex: 1; position: relative; min-height: 0; background: #101010; }
   #web-slot .hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); }
+  /* 子 webview 卸載／載入時的深色占位，避免 about:blank 白閃 */
+  #web-cover {
+    position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px; padding: 16px;
+    background: #101010; color: #c8c8c8; text-align: center; box-sizing: border-box;
+  }
+  #web-cover[hidden] { display: none !important; }
+  #web-cover .web-cover-title { font-size: 15px; color: #eee; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #web-cover .web-cover-detail { font-size: 12px; color: var(--dim); max-width: 92%; line-height: 1.45; }
+  #web-cover-eager {
+    margin-top: 4px; padding: 5px 12px; font: inherit; cursor: pointer;
+    background: #1e1e1e; color: #ddd; border: 1px solid #555; border-radius: 4px;
+  }
+  #web-cover-eager:hover { background: #2a2a2a; border-color: #777; }
   .pane-body { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   .pane-body[hidden] { display: none !important; }
   .splitter { flex: none; position: relative; z-index: 5; background: var(--split); touch-action: none; }
@@ -242,7 +256,13 @@
         <span class="grow"></span>
         <button id="home" type="button">首頁</button>
       </div>
-      <div id="web-slot"><div class="hint">網頁分頁未載入（切回分頁會重新載入）</div></div>
+      <div id="web-slot">
+        <div id="web-cover" hidden>
+          <div class="web-cover-title"></div>
+          <div class="web-cover-detail"></div>
+          <button type="button" id="web-cover-eager" hidden>立即載入</button>
+        </div>
+      </div>
     </section>
   </section>
   <div id="status-bar" title="記憶體／FPS 約每秒更新；不走行情 tick 熱路徑">
@@ -731,10 +751,24 @@
     }
   });
 
-  // ---- 網頁分頁（子 webview 僅載入作用中分頁；切走 about:blank 卸載）----
+  // ---- 網頁分頁（延遲卸載保暖 + 深色占位，減少白閃）----
+  // 切走後 WEB_UNLOAD_DELAY_MS 內不導向新頁／about:blank，子 webview 仍保留上一頁；
+  // 期間切回同一分頁可立即顯示。逾時或按「立即載入」才載入新 URL（同時釋放舊頁 RSS）。
+  const WEB_UNLOAD_DELAY_MS = 20000;
   let suppressUrlWrite = false;
-  /** 子 webview 目前載入內容對應的分頁 id；null = 已卸載（about:blank） */
+  /** 子 webview 目前載入內容對應的分頁 id；null = 已卸載（about:blank）或尚未載入 */
   let webChildTabId = null;
+  /** 子 webview 是否鋪在 web-slot（false 時 bounds 縮成 1×1，露出深色占位） */
+  let webChildVisible = false;
+  let webLoading = false;
+  let webDeferTimer = 0;
+  let webDeferTargetId = null;
+  let webDeferDeadline = 0;
+  const webCoverEl = document.getElementById("web-cover");
+  const webCoverTitle = webCoverEl.querySelector(".web-cover-title");
+  const webCoverDetail = webCoverEl.querySelector(".web-cover-detail");
+  const webCoverEagerBtn = document.getElementById("web-cover-eager");
+
   function setWebUrlDisplay(url) {
     const el = document.getElementById("web-url");
     el.textContent = url;
@@ -752,14 +786,119 @@
       return u.hostname.replace(/^www\./, "");
     } catch (_) { return "網頁"; }
   }
-  /** 卸載子 webview 重頁面，分頁 metadata／URL 仍留在 store */
-  function unloadChildWeb() {
-    if (webChildTabId == null) return;
-    webChildTabId = null;
+  function setWebCover(opts) {
+    opts = opts || {};
+    if (!opts.show) {
+      webCoverEl.hidden = true;
+      webCoverEagerBtn.hidden = true;
+      return;
+    }
+    webCoverEl.hidden = false;
+    webCoverTitle.textContent = opts.title || "";
+    webCoverDetail.textContent = opts.detail || "";
+    webCoverEagerBtn.hidden = !opts.showEagerBtn;
+  }
+  function parkChildWeb() {
+    webChildVisible = false;
+    lastSent = "";
+    reportBounds();
+  }
+  function showChildWeb() {
+    webChildVisible = true;
+    lastSent = "";
+    reportBounds();
+  }
+  function cancelWebDefer() {
+    if (webDeferTimer) {
+      clearTimeout(webDeferTimer);
+      webDeferTimer = 0;
+    }
+    webDeferTargetId = null;
+    webDeferDeadline = 0;
+  }
+  /** 真正導向 url；載入完成前保持深色占位，避免白閃 */
+  function commitWebTab(tab) {
+    if (!tab) return;
+    cancelWebDefer();
+    const url = tab.url || HOME_URL;
+    setWebUrlDisplay(url);
+    setWebCover({
+      show: true,
+      title: tab.title || shortWebTitle(url),
+      detail: "載入中…",
+      showEagerBtn: false,
+    });
+    parkChildWeb();
     suppressUrlWrite = true;
+    webChildTabId = tab.id;
+    webLoading = true;
+    send({ type: "open", url });
+    setTimeout(() => { suppressUrlWrite = false; }, 800);
+  }
+  /** 卸載為 about:blank（釋放 RSS）；仍用深色占位 */
+  function unloadChildWeb() {
+    cancelWebDefer();
+    if (webChildTabId == null && !webLoading) {
+      setWebCover({ show: true, title: "", detail: "網頁分頁未載入（切回分頁會重新載入）", showEagerBtn: false });
+      parkChildWeb();
+      return;
+    }
+    webChildTabId = null;
+    webLoading = true;
+    suppressUrlWrite = true;
+    setWebCover({ show: true, title: "", detail: "已卸載以節省記憶體", showEagerBtn: false });
+    parkChildWeb();
     send({ type: "open", url: "about:blank" });
     setTimeout(() => { suppressUrlWrite = false; }, 500);
   }
+  function scheduleCommitWebTab(tab) {
+    cancelWebDefer();
+    webDeferTargetId = tab.id;
+    webDeferDeadline = Date.now() + WEB_UNLOAD_DELAY_MS;
+    // 先藏起子 webview，保留上一頁在記憶體（保暖）
+    parkChildWeb();
+    const tick = () => {
+      webDeferTimer = 0;
+      if (webDeferTargetId !== tab.id) return;
+      const left = Math.max(0, webDeferDeadline - Date.now());
+      const sec = Math.ceil(left / 1000);
+      setWebCover({
+        show: true,
+        title: tab.title || shortWebTitle(tab.url || HOME_URL),
+        detail: left > 0
+          ? `約 ${sec} 秒後載入新頁（切回上一頁可立即顯示，以節省閃爍）`
+          : "載入中…",
+        showEagerBtn: left > 0,
+      });
+      if (left <= 0) {
+        commitWebTab(tab);
+        return;
+      }
+      webDeferTimer = setTimeout(tick, Math.min(250, left));
+    };
+    tick();
+  }
+  webCoverEagerBtn.addEventListener("click", () => {
+    const tab = store.panes.right.tabs.find(t => t.id === (webDeferTargetId || store.panes.right.active));
+    if (tab) commitWebTab(tab);
+  });
+  /** 子 webview 導覽完成（含 about:blank） */
+  window.onChildLoaded = url => {
+    webLoading = false;
+    if (!url || url === "about:blank" || String(url).startsWith("about:")) {
+      setWebCover({
+        show: true,
+        title: "",
+        detail: "已卸載以節省記憶體（切回分頁會重新載入）",
+        showEagerBtn: false,
+      });
+      parkChildWeb();
+      return;
+    }
+    setWebCover({ show: false });
+    showChildWeb();
+    if (typeof window.setWebUrl === "function") window.setWebUrl(url);
+  };
   window.setWebUrl = url => {
     if (!url || url === "about:blank" || String(url).startsWith("about:")) return;
     setWebUrlDisplay(url);
@@ -775,25 +914,44 @@
       renderTabbar("right");
     }
   };
-  function activateWebTab(tab) {
+  /**
+   * 啟用網頁分頁。
+   * opts.eager：立即載入（啟動、新分頁、首頁）；否則延遲 WEB_UNLOAD_DELAY_MS，期間切回可保暖。
+   */
+  function activateWebTab(tab, opts) {
+    opts = opts || {};
     if (!tab) return;
     const url = tab.url || HOME_URL;
     setWebUrlDisplay(url);
-    // 同一分頁已載入則略過，避免切回重抓
-    if (webChildTabId === tab.id) return;
-    suppressUrlWrite = true;
-    webChildTabId = tab.id;
-    send({ type: "open", url });
-    setTimeout(() => { suppressUrlWrite = false; }, 800);
+    cancelWebDefer();
+    // 同一分頁已在子 webview：立刻顯示（保暖命中）
+    if (webChildTabId === tab.id && !webLoading) {
+      setWebCover({ show: false });
+      showChildWeb();
+      return;
+    }
+    // 首次／明確立即：直接載入
+    if (opts.eager || webChildTabId == null) {
+      commitWebTab(tab);
+      return;
+    }
+    // 切到其他分頁：延遲載入，先占位並保留上一頁
+    scheduleCommitWebTab(tab);
   }
+
   document.getElementById("home").addEventListener("click", () => {
     const tab = store.panes.right.tabs.find(t => t.id === store.panes.right.active);
     if (tab && tab.kind === "web") {
       tab.url = HOME_URL;
       tab.title = "證交所";
       save(); renderTabbar("right");
-      webChildTabId = tab.id;
+      activateWebTab(tab, { eager: true });
+      return;
     }
+    cancelWebDefer();
+    setWebCover({ show: true, title: "證交所", detail: "載入中…", showEagerBtn: false });
+    parkChildWeb();
+    webLoading = true;
     send({ type: "home" });
     setWebUrlDisplay(HOME_URL);
   });
@@ -940,8 +1098,7 @@
     store.panes.right.active = tab.id;
     save();
     renderTabbar("right");
-    unloadChildWeb();
-    activateWebTab(tab);
+    activateWebTab(tab, { eager: true });
   }
 
   function closeTab(pane, id) {
@@ -967,9 +1124,8 @@
     if (pane === "top") applyChartTab(tab);
     else if (pane === "left") applyLeftTab(tab);
     else if (pane === "right") {
-      // 切走先卸載，再載入作用中分頁（釋放 Yahoo 等重站 WebKit 記憶體）
-      if (!same) unloadChildWeb();
-      activateWebTab(tab);
+      // 切換：延遲載入保暖上一頁；逾時或「立即載入」才導向新 URL（釋放舊頁 RSS）
+      activateWebTab(tab, { eager: same });
     }
   }
 
@@ -1075,11 +1231,14 @@
   function reportBounds() {
     const r = slot.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const msg = {
-      type: "bounds",
-      x: Math.round(r.left * dpr), y: Math.round(r.top * dpr),
-      w: Math.round(r.width * dpr), h: Math.round(r.height * dpr),
-    };
+    // 占位／保暖期間縮成 1×1，露出 #web-cover，避免子 webview 白畫面蓋住
+    const msg = webChildVisible
+      ? {
+          type: "bounds",
+          x: Math.round(r.left * dpr), y: Math.round(r.top * dpr),
+          w: Math.round(r.width * dpr), h: Math.round(r.height * dpr),
+        }
+      : { type: "bounds", x: 0, y: 0, w: 1, h: 1 };
     const s = JSON.stringify(msg);
     if (s === lastSent) return;
     lastSent = s;
@@ -1109,7 +1268,7 @@
   applyChartTab(store.panes.top.tabs.find(t => t.id === store.panes.top.active));
   applyFeedSource(store.ui.feed || "engine", false);
   applyLeftTab(store.panes.left.tabs.find(t => t.id === store.panes.left.active));
-  activateWebTab(store.panes.right.tabs.find(t => t.id === store.panes.right.active));
+  activateWebTab(store.panes.right.tabs.find(t => t.id === store.panes.right.active), { eager: true });
   applyLayout();
   window.addEventListener("load", applyLayout);
   setTimeout(() => { renderTabbar("top"); renderTabbar("left"); renderTabbar("right"); applyLayout(); }, 50);
