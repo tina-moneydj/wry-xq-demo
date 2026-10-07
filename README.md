@@ -74,6 +74,10 @@ cargo run --release
 
 報價與 K 線皆為**假的示範資料**，不是即時行情。
 
+## 文件
+
+- [效能設計原則](docs/performance-principles.md) — HFT 看盤心態、增量更新、虛擬化、畫線／分頁快取、壓測數字與檢查清單。
+
 ## 效能備註（壓力測試摘要）
 
 測試環境：Linux WebKitGTK、無獨立 GPU（偏悲觀；Windows WebView2 + GPU 通常更快）。Canvas 2D。
