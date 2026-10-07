@@ -47,7 +47,10 @@
   .title-tabs { padding-right: 4px; }
   .title-tabs .tabbar { flex: 1; min-width: 0; height: 28px !important; min-height: 28px !important; background: transparent; border-bottom: none; }
   .chart-title-inline, .web-url-inline { font-size: 12px; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
-  .demo-tag { font-size: 11px; padding-right: 6px; }
+  .src-switch { display: flex; flex: none; gap: 2px; padding-right: 6px; }
+  .src-switch button { background: #2a2a2a; color: var(--dim); border: 1px solid #444; border-radius: 3px;
+    font: inherit; font-size: 11px; padding: 1px 8px; cursor: pointer; }
+  .src-switch button.on { color: var(--text); background: #243044; border-color: #3b82f6; }
   .title b { color: var(--text); font-weight: 600; }
   .title .grow { flex: 1; }
   .title button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 3px;
@@ -186,7 +189,10 @@
       <div class="tabbar" id="tabbar-top" data-pane="top"></div>
       <span id="chart-title" class="chart-title-inline"></span>
       <span class="grow"></span>
-      <span class="demo-tag">示範資料（假的）</span>
+      <span class="src-switch" id="src-switch" role="group" aria-label="資料來源">
+        <button type="button" data-src="fake">假資料</button>
+        <button type="button" data-src="engine">Engine</button>
+      </span>
     </div>
     <div id="chart-toolbar" class="toolbar"></div>
     <div id="chart-wrap">
@@ -205,7 +211,7 @@
             <tbody id="quote-rows"></tbody>
           </table>
         </div>
-        <div class="note">以上報價全部是假的示範資料，不是即時行情。</div>
+        <div class="note" id="quote-note">以上報價是固定的示範資料，不是即時行情。</div>
       </div>
       <div class="pane-body" id="body-watch" hidden>
         <div class="watch-toolbar">
@@ -246,6 +252,7 @@
     <span id="mem-detail" style="opacity:.75"></span>
     <span style="flex:1"></span>
     <span id="mem-hint">取樣中…</span>
+    <span id="engine-state">行情未連線</span>
   </div>
 </div>
 
@@ -267,6 +274,7 @@
     { symbol: "2454", name: "聯發科",   price: 1280.0, change: +8.0 },
     { symbol: "0050", name: "元大台灣50", price: 186.2,  change: +0.4 },
   ];
+  const FAKE_QUOTES = QUOTES.map(q => ({ symbol: q.symbol, name: q.name, price: q.price, change: q.change }));
   const quoteBy = s => QUOTES.find(q => q.symbol === s) || QUOTES[0];
   const uid = (p) => p + "-" + Math.random().toString(36).slice(2, 8);
 
@@ -333,6 +341,7 @@
   chart.onMeta(meta => {
     const tab = store.panes.top.tabs.find(t => t.id === meta.tabId);
     if (tab && meta.period) { tab.period = meta.period; save(); renderTabbar("top"); }
+    sendFeed();
   });
 
   function applyChartTab(tab) {
@@ -422,7 +431,143 @@
       }
     }
     save();
+    sendFeed();
   }
+
+  function engineFeed() {
+    const symbols = [];
+    const seen = {};
+    const add = (sym) => {
+      const s = String(sym || "").trim();
+      if (!s || seen[s]) return;
+      seen[s] = 1;
+      symbols.push(s);
+    };
+    QUOTES.forEach(q => add(q.symbol));
+    (store.watchlist || []).forEach(add);
+    const tab = store.panes.top.tabs.find(t => t.id === store.panes.top.active);
+    if (tab) add(tab.symbol);
+    return {
+      symbols,
+      chart: tab && tab.symbol || QUOTES[0].symbol,
+      period: tab && tab.period || "D",
+    };
+  }
+  function feedSource() {
+    return store.ui.feed === "fake" ? "fake" : "engine";
+  }
+  let feedUnsubscribed = false;
+  function sendFeed() {
+    if (feedSource() !== "engine") {
+      if (feedUnsubscribed) return;
+      feedUnsubscribed = true;
+      send({ type: "feed", symbols: [], chart: "", period: "D" });
+      return;
+    }
+    feedUnsubscribed = false;
+    const feed = engineFeed();
+    send({ type: "feed", symbols: feed.symbols, chart: feed.chart, period: feed.period });
+  }
+  function paintFeedSwitch() {
+    const cur = feedSource();
+    document.querySelectorAll("#src-switch button").forEach(b => {
+      b.classList.toggle("on", b.getAttribute("data-src") === cur);
+    });
+    const note = document.getElementById("quote-note");
+    if (note) {
+      note.textContent = cur === "fake"
+        ? "以上報價是固定的示範資料，不是即時行情。"
+        : "報價來自 XQNext。日 K 仍是合成的，最後一根跟著現價；分時才是真實分鐘線。";
+    }
+  }
+  function refreshChartTitle() {
+    const active = store.panes.top.tabs.find(t => t.id === store.panes.top.active);
+    if (!active) return;
+    const q = quoteBy(active.symbol);
+    const up = q.change >= 0;
+    const title = document.getElementById("chart-title");
+    if (title) title.innerHTML = `${q.symbol} ${q.name}　<span class="${up ? "up" : "down"}">${q.price.toFixed(2)}　${up ? "+" : ""}${q.change.toFixed(2)}</span>`;
+  }
+  function applyFeedSource(src, persist) {
+    store.ui.feed = src === "fake" ? "fake" : "engine";
+    if (persist) save();
+    paintFeedSwitch();
+    if (store.ui.feed === "fake") {
+      FAKE_QUOTES.forEach(srcq => {
+        const row = QUOTES.find(q => q.symbol === srcq.symbol);
+        if (!row) return;
+        row.name = srcq.name;
+        row.price = srcq.price;
+        row.change = srcq.change;
+        delete row.volume;
+      });
+      chart.setDataSource("fake");
+      renderQuotes();
+      renderWatch();
+      refreshChartTitle();
+    } else {
+      chart.setDataSource("engine");
+    }
+    sendFeed();
+  }
+  document.getElementById("src-switch").addEventListener("click", e => {
+    const src = e.target && e.target.getAttribute && e.target.getAttribute("data-src");
+    if (src) applyFeedSource(src, true);
+  });
+  function upsertQuote(q) {
+    let row = QUOTES.find(x => x.symbol === q.symbol);
+    if (!row) {
+      row = { symbol: q.symbol, name: q.name || q.symbol, price: q.price, change: q.change };
+      QUOTES.push(row);
+    }
+    if (q.name) row.name = q.name;
+    row.price = q.price;
+    row.change = q.change;
+    row.volume = q.volume;
+    return row;
+  }
+  window.__enginePush = function (msg) {
+    const el = document.getElementById("engine-state");
+    if (!msg) return;
+    if (msg.down) {
+      if (el) el.textContent = "行情未連線";
+      return;
+    }
+    if (msg.hello) {
+      if (el) el.textContent = msg.hello.ready ? "行情連線" : "XQNext 尚未登入";
+      return;
+    }
+    if (feedSource() !== "engine") return;
+    if (msg.quotes && msg.quotes.length) {
+      const chartSym = chart.getContext && chart.getContext().symbol;
+      msg.quotes.forEach(q => {
+        const row = upsertQuote(q);
+        const first = chart.anchorLive(q.symbol);
+        if (chartSym === q.symbol && !first) {
+          const tick = { symbol: q.symbol, price: q.price, change: q.change };
+          // 分時的量是該分鐘成交量，不能把全日總量寫進最後一根。
+          if (chart.getContext().period !== "T") tick.volume = q.volume;
+          chart.updateQuote(tick);
+        }
+      });
+      if (groupWl && groupWl.applyEngineQuotes) groupWl.applyEngineQuotes(msg.quotes);
+      renderQuotes();
+      renderWatch();
+      refreshChartTitle();
+      if (el && el.textContent !== "行情連線") el.textContent = "行情連線";
+    }
+    if (msg.intraday && msg.intraday.symbol) {
+      const bars = (msg.intraday.bars || []).map(b => ({ t: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
+      chart.setIntraday(msg.intraday.symbol, bars);
+    }
+    if (msg.minutes) {
+      msg.minutes.forEach(m => {
+        const b = m.bar;
+        if (!b) return;
+        chart.applyMinute(m.symbol, { t: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] });
+      });
+    }
+  };
 
   // ---- 自選 ----
   function renderWatch() {
@@ -452,7 +597,7 @@
     if (!/^[A-Z0-9]{4,6}$/.test(v)) return;
     if (!store.watchlist.includes(v)) store.watchlist.push(v);
     document.getElementById("watch-input").value = "";
-    save(); renderWatch();
+    save(); renderWatch(); sendFeed();
   });
 
   // ---- 記事 ----
@@ -825,6 +970,7 @@
   renderQuotes();
   renderWatch();
   applyChartTab(store.panes.top.tabs.find(t => t.id === store.panes.top.active));
+  applyFeedSource(store.ui.feed || "engine", false);
   applyLeftTab(store.panes.left.tabs.find(t => t.id === store.panes.left.active));
   activateWebTab(store.panes.right.tabs.find(t => t.id === store.panes.right.active));
   applyLayout();
@@ -907,6 +1053,20 @@
       window.__benchChartTabs().catch(err => {
         if (window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg: "TABPERF|ERROR|" + String(err && err.stack || err) }));
       });
+    }, 1000);
+  }
+  // 量測 render() 單幀成本（wheel 縮放／平移等熱路徑），結果以 WHEELPERF|… 印到 stderr。
+  if (window.XQ_WHEEL_PERF) {
+    setTimeout(() => {
+      try {
+        const base = chart.__perf.measure({ frames: 90 });
+        const panLike = chart.__perf.measure({ frames: 90, withPan: true });
+        const msg = "WHEELPERF|" + JSON.stringify({ base, panLike });
+        if (window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg }));
+        console.log(msg);
+      } catch (err) {
+        if (window.ipc) window.ipc.postMessage(JSON.stringify({ type: "log", msg: "WHEELPERF|ERROR|" + String(err && err.stack || err) }));
+      }
     }, 1000);
   }
 

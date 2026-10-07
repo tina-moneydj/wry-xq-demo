@@ -37,8 +37,7 @@
   };
   const SUB_ORDER = ["vol", "kd", "macd", "rsi", "wr", "dmi", "atr", "obv"];
   const MAX_OVERLAYS = 20;   // 主圖疊加最多 20 組（同類型不同參數各自算一組）
-  const MAX_SUBS = 10;       // 副圖最多 10 格（左欄+右欄）
-  const SIDE_AXIS = 40;      // 左右副圖自己的刻度寬
+  const MAX_SUBS = 10;       // 副圖最多 10 格，全部排在主圖下方、與 K 線同一時間軸
   const OV_COLORS = ["#f5c542", "#c678dd", "#56b6c2", "#ff7f50", "#7fdbff", "#e5484d", "#30a46c",
     "#f06292", "#ffb74d", "#4fc3f7", "#aed581", "#ce93d8", "#80cbc4", "#ffab91", "#90caf9",
     "#fff176", "#ef9a9a", "#b0bec5", "#dce775", "#b39ddb"];
@@ -110,8 +109,8 @@
     let left = Math.max(0, Math.min(MAX_SUBS, Math.round(+sl.left || 0)));
     let right = Math.max(0, Math.min(MAX_SUBS, Math.round(+sl.right || 0)));
     if (left + right > MAX_SUBS) right = MAX_SUBS - left;
-    // 預設：有副圖時左右均分（成交量偏左）
-    if (!store.ui.subLayout) { left = 1; right = 3; }
+    // 舊版左右欄數量仍留在 state，但不再決定版面（副圖一律排在主圖下方）。
+    if (!store.ui.subLayout) { left = 0; right = 0; }
     store.ui.subLayout = { left, right };
     return store.ui.subLayout;
   }
@@ -592,6 +591,10 @@
     }
     const cfg = () => entry.cfg;
     const drawings = () => entry.drawings;
+    // 分時若已從 engine 收到分鐘 K，就不要再用假資料。key 是畫面代號（2330），不是 2330.TW。
+    const engineIntraday = {};
+    const engineAnchored = {};
+    let dataSource = "fake";
 
     function series() {
       const k = key();
@@ -603,7 +606,7 @@
           let bars = daily;
           if (period === "W") bars = aggregate(daily, weekKey);
           if (period === "M") bars = aggregate(daily, monthKey);
-          if (period === "T") bars = genIntraday(quote, daily[daily.length - 2].c);
+          if (period === "T") bars = engineIntraday[quote.symbol] || genIntraday(quote, daily[daily.length - 2].c);
           cache[k] = { bars, memo: {} };
         }
       }
@@ -685,7 +688,6 @@
     function buildIndMenu() {
       indMenu.innerHTML = "";
       ensureOverlays(entry);
-      const sl = ensureSubLayout();
 
       // ---- 主圖疊加（最多 20）----
       const h1 = document.createElement("div"); h1.className = "menu-title";
@@ -729,37 +731,14 @@
         indMenu.appendChild(row);
       });
 
-      // ---- 副圖版面（左/右，合計 ≤10）----
-      const h2 = document.createElement("div"); h2.className = "menu-title";
-      h2.textContent = `副圖版面（左+右 ≤ ${MAX_SUBS}，主圖置中）`; indMenu.appendChild(h2);
-      const lay = document.createElement("div"); lay.className = "ind-row";
-      const mkNum = (label, key) => {
-        const sp = document.createElement("span"); sp.className = "ind-pl"; sp.textContent = label; lay.appendChild(sp);
-        const inp = document.createElement("input"); inp.type = "number"; inp.min = "0"; inp.max = String(MAX_SUBS);
-        inp.value = sl[key]; inp.style.width = "44px";
-        inp.addEventListener("change", () => {
-          let v = Math.round(+inp.value); if (!Number.isFinite(v) || v < 0) v = 0;
-          v = Math.min(MAX_SUBS, v);
-          const other = key === "left" ? "right" : "left";
-          if (v + sl[other] > MAX_SUBS) sl[other] = MAX_SUBS - v;
-          sl[key] = v; store.ui.subLayout = { left: sl.left, right: sl.right };
-          buildIndMenu(); changed();
-        });
-        lay.appendChild(inp);
-      };
-      mkNum("左欄", "left"); mkNum("右欄", "right");
-      const sum = document.createElement("span"); sum.className = "ind-pl";
-      sum.textContent = `合計 ${sl.left + sl.right}`; lay.appendChild(sum);
-      indMenu.appendChild(lay);
-
-      // ---- 副圖開關 ----
+      // ---- 副圖開關（全部排在主圖下方，與 K 線同一時間軸）----
       const h3 = document.createElement("div"); h3.className = "menu-title";
-      h3.textContent = "副圖指標（依順序填入左欄再右欄）"; indMenu.appendChild(h3);
+      h3.textContent = `副圖指標（排在主圖下方，最多 ${MAX_SUBS} 格）`; indMenu.appendChild(h3);
       for (const [id, g2, label, params] of IND_DEFS) {
         const row = document.createElement("div"); row.className = "ind-row";
         const lab = document.createElement("label"); lab.className = "ind-name";
         const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!cfg()[id].on;
-        cb.addEventListener("change", () => { cfg()[id].on = cb.checked; changed(); });
+        cb.addEventListener("change", () => { cfg()[id].on = cb.checked; buildIndMenu(); changed(); });
         lab.append(cb, document.createTextNode(" " + label));
         row.append(lab);
         for (const [pk, pl, isFloat] of params) {
@@ -780,7 +759,6 @@
       reset.className = "menu-item"; reset.textContent = "恢復預設指標";
       reset.addEventListener("click", () => {
         entry.cfg = clone(DEFAULT_CFG); entry.overlays = defaultOverlays();
-        store.ui.subLayout = { left: 1, right: 3 };
         lastCfg = entry.cfg; buildIndMenu(); changed();
       });
       indMenu.appendChild(reset);
@@ -904,75 +882,47 @@
       g.textBaseline = "middle";
 
       const { bars } = series(), n = bars.length, v = view(), c = cfg();
-      const sl = ensureSubLayout();
-      const enabledSubs = SUB_ORDER.filter(id => c[id] && c[id].on);
-      const leftN = Math.min(sl.left, enabledSubs.length);
-      const rightN = Math.min(sl.right, Math.max(0, enabledSubs.length - leftN));
-      const leftIds = enabledSubs.slice(0, leftN);
-      const rightIds = enabledSubs.slice(leftN, leftN + rightN);
+      // 主圖不獨立成中間一欄：已開的副圖全部堆在下方，與 K 線共用 plotL/plotR/xOf。
+      // 舊的 ui.subLayout 左右欄不再切版面（先前左 4、右 6 會把主圖夾在中間）。
+      const belowIds = SUB_ORDER.filter(id => c[id] && c[id].on).slice(0, MAX_SUBS);
 
-      // 主圖置中，左右欄堆疊副圖
-      let leftColW = leftIds.length ? Math.max(110, Math.min(Math.floor(cssW * 0.2), Math.floor(cssW * 0.22))) : 0;
-      let rightColW = rightIds.length ? Math.max(110, Math.min(Math.floor(cssW * 0.2), Math.floor(cssW * 0.22))) : 0;
-      if (leftColW + rightColW > cssW * 0.55) {
-        const scale = (cssW * 0.55) / (leftColW + rightColW);
-        leftColW = Math.floor(leftColW * scale); rightColW = Math.floor(rightColW * scale);
-      }
-      const pricePlotL = leftColW + (leftColW ? 2 : 0) + PLOT_L;
-      const pricePlotR = cssW - rightColW - (rightColW ? 2 : 0) - AXIS_W;
-      const plotL = pricePlotL, plotR = Math.max(pricePlotL + 80, pricePlotR), plotW = plotR - plotL;
+      const plotL = PLOT_L, plotR = Math.max(plotL + 80, cssW - AXIS_W), plotW = plotR - plotL;
       clampView(v, n);
       const xOf = i => plotR - (v.right - i) * v.barW - v.barW / 2;
       const idxAt = x => v.right - (plotR - v.barW / 2 - x) / v.barW;
-      const mkXOf = (pL, pR) => {
-        const w = pR - pL, scale = w / Math.max(1, plotW);
-        return i => pR - (v.right - i) * v.barW * scale - (v.barW * scale) / 2;
-      };
       const i0 = Math.max(0, Math.floor(idxAt(plotL))), i1 = Math.min(n - 1, Math.ceil(idxAt(plotR)));
 
       const avail = Math.max(60, cssH - TIME_H);
+      // 主圖始終是最高的一格，副圖均分剩下的高度，整欄共用同一條時間軸。
+      const nBelow = belowIds.length;
+      let priceH = avail, belowH = 0;
+      if (nBelow) {
+        const share = nBelow <= 1 ? 0.78 : nBelow === 2 ? 0.64 : nBelow <= 4 ? 0.54 : 0.48;
+        priceH = Math.round(avail * share);
+        belowH = (avail - priceH) / nBelow;
+        const minSub = 16;
+        if (belowH < minSub) {
+          priceH = Math.max(minSub * 2, avail - nBelow * minSub);
+          belowH = (avail - priceH) / nBelow;
+        } else if (nBelow <= 2 && belowH > 110) {
+          belowH = Math.min(110, avail * (nBelow === 1 ? 0.22 : 0.18));
+          priceH = avail - belowH * nBelow;
+        }
+      }
       // 圖例行數粗估（稍後用真實 infoIdx 重算內容）；最多預留 6 行
       const priceHdr = 16 + 14 * Math.min(6, Math.max(1, Math.ceil(((entry.overlays || []).length + 1) / 4)));
       const panes = [];
-      // 價格主圖：置中、佔滿可用高度
-      const pricePane = { id: "price", side: "center", top: 0, h: avail, hdr: priceHdr, plotL, plotR, axisX: plotR };
+      const pricePane = { id: "price", top: 0, h: priceH, hdr: priceHdr, plotL, plotR, axisX: plotR };
       panes.push(pricePane);
-      const stack = (ids, side, colL, colR, axisX) => {
-        if (!ids.length) return;
-        const each = avail / ids.length;
-        ids.forEach((id, k) => {
-          panes.push({
-            id, side, top: k * each, h: each, hdr: 13,
-            plotL: colL, plotR: colR, axisX, xOf: mkXOf(colL, colR),
-          });
-        });
-      };
-      // 左欄：刻度在左，繪圖區在右
-      if (leftIds.length) {
-        const colL = SIDE_AXIS, colR = leftColW - 2;
-        stack(leftIds, "left", colL, Math.max(colL + 20, colR), 0);
-      }
-      // 右欄：繪圖區在左，刻度在右
-      if (rightIds.length) {
-        const colL = cssW - rightColW + 2, colR = cssW - SIDE_AXIS;
-        stack(rightIds, "right", colL, Math.max(colL + 20, colR), colR);
-      }
+      let belowY = priceH;
+      for (const id of belowIds) { panes.push({ id, top: belowY, h: belowH, hdr: 13, plotL, plotR, axisX: plotR }); belowY += belowH; }
 
-      const hovPane = mouse && panes.find(p => mouse.y >= p.top && mouse.y < p.top + p.h
-        && mouse.x >= (p.plotL !== undefined ? p.plotL : plotL) && mouse.x < (p.plotR !== undefined ? p.plotR : plotR));
+      const hovPane = mouse && panes.find(p => mouse.y >= p.top && mouse.y < p.top + p.h && mouse.x >= plotL && mouse.x < plotR);
       let hovIdx = -1;
-      if (hovPane) {
-        if (hovPane.side === "center" || !hovPane.side) {
-          hovIdx = Math.max(0, Math.min(n - 1, Math.round(idxAt(Math.min(plotR, Math.max(plotL, mouse.x))))));
-        } else {
-          const scale = (hovPane.plotR - hovPane.plotL) / Math.max(1, plotW);
-          const barW2 = v.barW * scale;
-          hovIdx = Math.max(0, Math.min(n - 1, Math.round(v.right - (hovPane.plotR - barW2 / 2 - mouse.x) / barW2)));
-        }
-      }
+      if (hovPane) hovIdx = Math.max(0, Math.min(n - 1, Math.round(idxAt(Math.min(plotR, Math.max(plotL, mouse.x))))));
       const infoIdx = hovIdx >= 0 ? hovIdx : Math.min(i1, n - 1);
       const ovLines = wrapItems(overlayLegend(infoIdx), plotW - 8);
-      const L = { plotL, plotR, plotW, panes, bottom: avail, xOf, idxAt, n, leftColW, rightColW };
+      const L = { plotL, plotR, plotW, panes, bottom: avail, xOf, idxAt, n };
       layout = L;
       const hov = hovIdx;
       const step = Math.max(1, Math.ceil(80 / v.barW)), ticks = [];
@@ -986,13 +936,8 @@
         const xOfP = pane.xOf || xOf;
         const top = pane.top + pane.hdr, h = Math.max(8, pane.h - pane.hdr - 3);
         g.strokeStyle = C.sep; g.lineWidth = 1;
-        if (pane.side !== "center" && pane.top > 0) {
-          g.beginPath(); g.moveTo(pL - 4, pane.top + 0.5); g.lineTo(pR + 4, pane.top + 0.5); g.stroke();
-        } else if (pane.side === "center" && leftColW) {
-          g.beginPath(); g.moveTo(leftColW + 0.5, 0); g.lineTo(leftColW + 0.5, avail); g.stroke();
-        }
-        if (pane.side === "center" && rightColW) {
-          g.beginPath(); g.moveTo(cssW - rightColW + 0.5, 0); g.lineTo(cssW - rightColW + 0.5, avail); g.stroke();
+        if (pane.top > 0) {
+          g.beginPath(); g.moveTo(pL, pane.top + 0.5); g.lineTo(pR, pane.top + 0.5); g.stroke();
         }
         g.strokeStyle = C.grid;
         for (const i of ticks) { const x = Math.round(xOfP(i)) + 0.5; if (x >= pL && x <= pR) { g.beginPath(); g.moveTo(x, top); g.lineTo(x, top + h); g.stroke(); } }
@@ -1035,10 +980,9 @@
         const yOf = val => top + h * (1 - (val - lo) / (hi - lo));
         Object.assign(pane, { lo, hi, y0: top, ph: h, yOf, valAt: y => lo + (1 - (y - top) / h) * (hi - lo) });
 
-        // 刻度（左欄在左，其餘在右）
-        const axisLeft = pane.side === "left";
-        g.fillStyle = C.axis; g.textAlign = axisLeft ? "right" : "left";
-        const axisTx = axisLeft ? pL - 4 : pR + 6;
+        // 刻度跟主圖一樣在右側，副圖與 K 線對齊
+        g.fillStyle = C.axis; g.textAlign = "left";
+        const axisTx = pR + 6;
         if (spec && spec.guides && spec.fixed) {
           for (const t of spec.guides) {
             const y = Math.round(yOf(t)) + 0.5;
@@ -1094,7 +1038,8 @@
       compositeDrawLayer(L);
       if (hov >= 0) crosshair(L, bars, hov);
       sync();
-      captureTabSnapshot(tabId);
+      // 分頁快照只在切換分頁前（setContext）拍一次即可瞬切，這裡不必每幀重拍，
+      // 避免 wheel 縮放／拖曳／報價更新時，每個 render() 都多一次整張 canvas 的 bitmap 複製。
     }
 
     function line(arr, color, i0, i1, xOf, yOf, width = 1.2) {
@@ -1164,7 +1109,8 @@
       if (!spec) {
         const b = bars[i], prev = period === "T" ? quote.price - quote.change : i > 0 ? bars[i - 1].c : b.o;
         const ch = b.c - prev, col = ch >= 0 ? C.up : C.down;
-        put(`${PERIODS.find(p => p[0] === period)[1]}（假資料）`, C.axis);
+        const srcLabel = dataSource === "engine" ? (period === "T" ? "engine" : "合成K·現價") : "假資料";
+        put(`${PERIODS.find(p => p[0] === period)[1]}（${srcLabel}）`, C.axis);
         put(fmtTime(b.t, period, true), C.text);
         put(`開 ${fmtP(b.o)}`, C.text); put(`高 ${fmtP(b.h)}`, C.text); put(`低 ${fmtP(b.l)}`, C.text);
         put(`收 ${fmtP(b.c)}`, col); put(`${ch >= 0 ? "+" : ""}${ch.toFixed(2)} (${ch >= 0 ? "+" : ""}${((ch / prev) * 100).toFixed(2)}%)`, col);
@@ -1652,10 +1598,10 @@
     canvas.addEventListener("wheel", e => {
       e.preventDefault();
       if (!layout) return;
-      const p = local(e), v = view(), x = Math.min(p.x, layout.plotR), anchor = layout.idxAt(x);
+      const v = view();
+      // 縮放時固定最右側（不隨游標位置錨定），讓最新一根K棒永遠貼齊右緣
       v.barW *= e.deltaY < 0 ? 1.15 : 1 / 1.15;
       clampView(v, layout.n);
-      v.right = anchor + (layout.plotR - v.barW / 2 - x) / v.barW;
       requestRender();
     }, { passive: false });
     document.addEventListener("keydown", e => {
@@ -1746,7 +1692,7 @@
       markDrawingsDirty(); sync(); render();
       return 0;
     }
-    /** 最重 UI：20 主圖疊加 + 全部副圖 + 左右分欄 + 大量畫線。回傳實際配置。 */
+    /** 最重 UI：20 主圖疊加 + 全部副圖（堆在主圖下方）+ 大量畫線。回傳實際配置。 */
     function __perfSetupStress(opts) {
       opts = opts || {};
       if (!quote || !entry) throw new Error("chart not ready");
@@ -1768,8 +1714,6 @@
         c[id].on = true;
       }
       if (c.volma) c.volma.on = true;
-      // 左右各 5（實際 pane 數 = min(left+right, enabled)；enabled=8 → 5+3）
-      store.ui.subLayout = { left: 5, right: 5 };
       ensureSubLayout();
       // 畫線：混合工具，偏重 fib/channel/text + 大量 trend
       drawings().length = 0; selected = -1; pending = null; drag = null;
@@ -1797,7 +1741,7 @@
         subsEnabled: enabledSubs.length,
         subIds: enabledSubs,
         subLayout: { ...sl },
-        panesExpected: 1 + Math.min(sl.left + sl.right, enabledSubs.length),
+        panesExpected: 1 + Math.min(MAX_SUBS, enabledSubs.length),
         drawings: drawings().length,
         period,
         symbol: quote.symbol,
@@ -1811,7 +1755,6 @@
       const c = cfg();
       for (const id of SUB_ORDER) { if (c[id]) c[id].on = (id === "vol"); }
       if (c.volma) c.volma.on = true;
-      store.ui.subLayout = { left: 1, right: 0 };
       drawings().length = 0; selected = -1; pending = null; drag = null;
       markDrawingsDirty(); invalidateSeriesMemo(); sync(); render();
       return { overlays: 3, subsEnabled: 1, drawings: 0, subLayout: ensureSubLayout() };
@@ -1941,7 +1884,75 @@
       };
     }
 
+    function dropSymbolCache(symbol) {
+      const mark = "|" + symbol + "|";
+      for (const k of Object.keys(cache)) {
+        if (k === symbol + "|D" || k.indexOf(mark) >= 0) delete cache[k];
+      }
+      for (const k of Object.keys(views)) {
+        if (k.indexOf(mark) >= 0) delete views[k];
+      }
+    }
+    function showIntraday(symbol) {
+      const bars = engineIntraday[symbol];
+      if (!bars || !quote || quote.symbol !== symbol || period !== "T") return;
+      cache[key()] = { bars, memo: {} };
+      markDrawingsDirty();
+      render();
+    }
     return {
+      /** 假資料：清掉 engine 的分鐘線與錨定，圖回到依代號產生的序列。 */
+      setDataSource(src) {
+        const next = src === "engine" ? "engine" : "fake";
+        dataSource = next;
+        if (next !== "fake") { markDrawingsDirty(); render(); return; }
+        for (const k of Object.keys(engineIntraday)) delete engineIntraday[k];
+        for (const k of Object.keys(engineAnchored)) delete engineAnchored[k];
+        for (const k of Object.keys(cache)) delete cache[k];
+        for (const k of Object.keys(views)) delete views[k];
+        markDrawingsDirty();
+        render();
+      },
+      /** 第一筆真實成交價進來時，丟掉用假價格鋪的 K 線，讓最後一根對上實價。 */
+      anchorLive(symbol) {
+        if (!symbol || engineAnchored[symbol]) return false;
+        engineAnchored[symbol] = true;
+        dropSymbolCache(symbol);
+        if (quote && quote.symbol === symbol) { markDrawingsDirty(); render(); }
+        return true;
+      },
+      setIntraday(symbol, bars) {
+        if (!symbol || !bars) return;
+        engineIntraday[symbol] = bars;
+        showIntraday(symbol);
+      },
+      /** 同一分鐘改最後一根；新的分鐘才追加。volume 是該分鐘累計量。 */
+      applyMinute(symbol, bar) {
+        if (!symbol || !bar) return;
+        let list = engineIntraday[symbol];
+        if (!list) list = engineIntraday[symbol] = [];
+        const last = list[list.length - 1];
+        const same = last && last.t === bar.t;
+        if (!same) list.push({ t: bar.t, o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v });
+        else {
+          last.h = Math.max(last.h, bar.h);
+          last.l = Math.min(last.l, bar.l);
+          last.c = bar.c;
+          last.v = bar.v;
+        }
+        if (!quote || quote.symbol !== symbol || period !== "T") return;
+        const shown = cache[key()];
+        if (!shown || shown.bars !== list) { showIntraday(symbol); return; }
+        // 新的一分鐘已經推進 list（就是畫面上的序列），不能再 append 一次。
+        if (!same) {
+          const v = view();
+          if (v.right >= list.length - 3) v.right = list.length - 1;
+          invalidateSeriesMemo();
+          requestRender();
+          return;
+        }
+        applyTick({ symbol, price: bar.c, high: bar.h, low: bar.l, open: bar.o, volume: bar.v });
+      },
       setQuote(q) {
         if (quote && quote.symbol === q.symbol) return;
         quote = q; loadEntry(); closeMenus(); sync(); render();

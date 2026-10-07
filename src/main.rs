@@ -7,7 +7,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+mod engine;
+
 use serde::Deserialize;
+use serde_json::Value;
 use tao::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
@@ -38,6 +41,8 @@ enum IpcMessage {
     Log { msg: String },
     /// 畫線與指標設定，整份存成 JSON 檔（下次啟動時再交回給網頁）。
     Save { data: serde_json::Value },
+    /// 要向 XQNext 訂閱的代號。chart 是目前走勢圖，period 為 T 時才要分時。
+    Feed { symbols: Vec<String>, chart: String, period: String },
 }
 
 /// 從 webview 回呼送到主執行緒事件迴圈的事件。
@@ -48,11 +53,15 @@ enum UserEvent {
     ChildLoaded(String),
     /// 約每秒一次的程序記憶體取樣（含 WebView 子行程），給狀態列用。
     MemStats { rss_mb: f64, rss_max_mb: f64, cpu_pct: f64 },
+    /// XQNext 合併後的一包行情，交給網頁一次畫完。
+    EnginePush(Value),
 }
 
 fn main() -> wry::Result<()> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    let (feed_tx, feed_rx) = std::sync::mpsc::channel::<engine::FeedCmd>();
+    engine::spawn(proxy.clone(), feed_rx, UserEvent::EnginePush);
 
     let window = WindowBuilder::new()
         .with_title("XQ 風格測試 (tao + wry)")
@@ -80,11 +89,13 @@ fn main() -> wry::Result<()> {
         .unwrap_or_else(|| "null".into());
     let tab_stress = std::env::var_os("XQ_TAB_STRESS").is_some_and(|v| v != "0");
     let group_stress = std::env::var_os("XQ_GROUP_STRESS").is_some_and(|v| v != "0");
+    let wheel_perf = std::env::var_os("XQ_WHEEL_PERF").is_some_and(|v| v != "0"); // render() 單幀成本壓測（wheel 縮放熱路徑）
     let init_script = format!(
-        "window.XQ_STATE = {saved_state};{}{}{}",
+        "window.XQ_STATE = {saved_state};{}{}{}{}",
         if debug { " window.XQ_DEBUG = true;" } else { "" },
         if tab_stress { " window.XQ_TAB_STRESS = true;" } else { "" },
-        if group_stress { " window.XQ_GROUP_STRESS = true;" } else { "" }
+        if group_stress { " window.XQ_GROUP_STRESS = true;" } else { "" },
+        if wheel_perf { " window.XQ_WHEEL_PERF = true;" } else { "" }
     );
 
     // 1) 主 webview（先建立，在下層）。
@@ -193,6 +204,14 @@ fn main() -> wry::Result<()> {
                         eprintln!("無法儲存設定到 {}: {error}", path.display());
                     }
                 }
+            }
+            Event::UserEvent(UserEvent::Ipc(IpcMessage::Feed { symbols, chart, period })) => {
+                let _ = feed_tx.send(engine::FeedCmd { symbols, chart, period });
+            }
+            Event::UserEvent(UserEvent::EnginePush(value)) => {
+                let _ = main_view.evaluate_script(&format!(
+                    "window.__enginePush&&window.__enginePush({value})"
+                ));
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Home)) => {
                 let _ = web_view.load_url(HOME_URL);

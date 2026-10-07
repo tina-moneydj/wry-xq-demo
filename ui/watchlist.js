@@ -629,6 +629,34 @@
       };
     }
 
+    /** engine 報價：只改對到的列，可見列排進 dirty。合成壓測表不覆寫。 */
+    function applyEngineQuotes(rows) {
+      if (!data || data.synthetic || !rows || data.count > 8000) return 0;
+      let n = 0;
+      for (let r = 0; r < rows.length; r++) {
+        const q = rows[r];
+        if (!q || !q.symbol) continue;
+        for (let i = 0; i < data.count; i++) {
+          if (data.symbols[i] !== q.symbol) continue;
+          data.price[i] = q.price;
+          data.change[i] = q.change;
+          data.prev[i] = q.price - q.change;
+          if (q.price > data.high[i]) data.high[i] = q.price;
+          if (q.price < data.low[i] || data.low[i] === 0) data.low[i] = q.price;
+          if (Number.isFinite(q.volume)) {
+            data.volume[i] = q.volume;
+            data.turnover[i] = q.volume * q.price;
+          }
+          if (q.name) data.names[i] = q.name;
+          dirtyRows.add(i);
+          n++;
+          break;
+        }
+      }
+      if (n) schedulePaint(false);
+      return n;
+    }
+
     /** 高頻 tick：只改資料陣列，可見列排進 dirty → rAF 增量上色 */
     function applyTicks(n) {
       n = Math.max(1, n | 0);
@@ -801,6 +829,7 @@
           : { id: g.id, name: g.name, symbols: (g.symbols || []).slice() }),
       }),
       reload: () => schedulePaint(true),
+      applyEngineQuotes,
       applyTicks,
       startTicks,
       stopTicks,
