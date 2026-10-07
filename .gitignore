@@ -1,3 +1,5 @@
 /target
 *.png
 !docs/screenshot.png
+feedhost/**/bin/
+feedhost/**/obj/

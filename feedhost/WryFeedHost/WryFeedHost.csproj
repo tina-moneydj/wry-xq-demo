@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- net8.0 builds protocol server and demo-ticks on Linux.
+         On Windows beside XQNext, same TFM; retarget net8.0-windows when wiring XQData.DAQEngine.Client 0.43.0. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>WryFeedHost</RootNamespace>
+    <AssemblyName>WryFeedHost</AssemblyName>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+</Project>

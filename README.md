@@ -72,7 +72,39 @@ cargo run --release
 
 選用環境變數：`XQ_DEBUG=1`（ipc 除錯）、`XQ_TAB_STRESS=1`（16 走勢圖分頁切換壓測）、`XQ_GROUP_STRESS=1`（組合表 5 萬列壓測）。
 
-標題列可選「假資料」或「Engine」。假資料不向 XQNext 訂閱；Engine 的報價與分時來自 XQNext，日 K 仍是合成的，最後一根跟著現價。
+標題列可選「假資料」或「Engine」。假資料不向 XQNext 訂閱；Engine 的報價與分時來自 XQNext（經本機 WryFeedHost），日 K 仍是合成的，最後一根跟著現價。
+
+## Engine 行情（WryFeedHost）
+
+真實報價／分時由旁邊的 **WryFeedHost**（`feedhost/`）推到 `127.0.0.1:47631`，協定與 `src/engine.rs` 一致（LE u32 長度前綴二進位；**不要**在 hot path 用 JSON）。
+
+### Windows（建議：XQNext 旁掛）
+
+1. 啟動並**登入** XQNext（需要 SysJust 帳密／token；未登入則 `hello.ready=0`，沒有即時行情）。
+2. 編譯並執行 WryFeedHost：
+
+   ```bat
+   cd feedhost
+   dotnet build -c Release
+   dotnet run --project WryFeedHost -c Release
+   ```
+
+3. 再 `cargo run` 本專案，標題列選 **Engine**。
+
+- **空訂閱**（0 個代號，例如切回「假資料」）= 取消訂閱／放下 FieldPool。
+- 目前 `EngineBridge` 已接好 TCP 協定與訂閱狀態機；真正的 `RT_RefQuote2`／`KData_Min`／FieldPool 仍需在 Windows 上接 `DAQEngine.Client`（套件提示 `XQData.DAQEngine.Client` 0.43.0）與登入憑證。詳見 [feedhost/README.md](feedhost/README.md)。
+
+### Linux／Wine 限制
+
+XQNext 的 WPF UI 在 Wine 下會因字型等問題崩潰；即便 Engine 行程起來，**Named Pipe 也不會出現**，無法當正式即時源。請在 **Windows** 上跑 XQNext + WryFeedHost。
+
+### 協定路徑測試（非即時）
+
+```bash
+dotnet run --project feedhost/WryFeedHost -c Release -- --demo-ticks
+```
+
+清楚標示為 **path-test**，推送合成高頻二進位報價／分鐘線，**不是**嘉實即時行情。
 
 ## 文件
 

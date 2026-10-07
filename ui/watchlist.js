@@ -257,7 +257,14 @@
     let columns = ensureColumns(opts.columns);
     let groupsMeta = []; // {id,name,synthetic?,count?,seed?,symbols?}
     let activeId = null;
+    let symIndex = new Map();
+    function rebuildSymIndex() {
+      symIndex = new Map();
+      if (!data || !data.symbols) return;
+      for (let i = 0; i < data.count; i++) symIndex.set(data.symbols[i], i);
+    }
     let data = makeSynthetic(0, 1);
+    rebuildSymIndex();
     let selectedRow = -1;
     let scrollTop = 0, scrollLeft = 0;
     let viewportH = 200, viewportW = 400;
@@ -402,6 +409,7 @@
       } else {
         data = makeFromSymbols(g.symbols || [], quoteLookup);
       }
+      rebuildSymIndex();
       dirtyRows.clear();
       selectedRow = -1;
       elBody.scrollTop = 0;
@@ -629,29 +637,28 @@
       };
     }
 
-    /** engine 報價：只改對到的列，可見列排進 dirty。合成壓測表不覆寫。 */
+    /** engine 報價：O(1) 對列，可見列排進 dirty。合成壓測表不覆寫。 */
     function applyEngineQuotes(rows) {
       if (!data || data.synthetic || !rows || data.count > 8000) return 0;
+      if (symIndex.size !== data.count) rebuildSymIndex();
       let n = 0;
       for (let r = 0; r < rows.length; r++) {
         const q = rows[r];
         if (!q || !q.symbol) continue;
-        for (let i = 0; i < data.count; i++) {
-          if (data.symbols[i] !== q.symbol) continue;
-          data.price[i] = q.price;
-          data.change[i] = q.change;
-          data.prev[i] = q.price - q.change;
-          if (q.price > data.high[i]) data.high[i] = q.price;
-          if (q.price < data.low[i] || data.low[i] === 0) data.low[i] = q.price;
-          if (Number.isFinite(q.volume)) {
-            data.volume[i] = q.volume;
-            data.turnover[i] = q.volume * q.price;
-          }
-          if (q.name) data.names[i] = q.name;
-          dirtyRows.add(i);
-          n++;
-          break;
+        const i = symIndex.get(q.symbol);
+        if (i == null) continue;
+        data.price[i] = q.price;
+        data.change[i] = q.change;
+        data.prev[i] = q.price - q.change;
+        if (q.price > data.high[i]) data.high[i] = q.price;
+        if (q.price < data.low[i] || data.low[i] === 0) data.low[i] = q.price;
+        if (Number.isFinite(q.volume)) {
+          data.volume[i] = q.volume;
+          data.turnover[i] = q.volume * q.price;
         }
+        if (q.name) data.names[i] = q.name;
+        dirtyRows.add(i);
+        n++;
       }
       if (n) schedulePaint(false);
       return n;

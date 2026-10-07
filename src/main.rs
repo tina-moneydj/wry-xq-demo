@@ -57,11 +57,76 @@ enum UserEvent {
     EnginePush(Value),
 }
 
+
+/// 合併同一幀內多包 Engine 推送：報價／分鐘線各代號只留最新，分時整包覆蓋，減少 evaluate_script。
+fn coalesce_engine_push(dst: &mut Option<Value>, src: Value) {
+    let Some(obj) = src.as_object() else {
+        *dst = Some(src);
+        return;
+    };
+    let entry = dst.get_or_insert_with(|| serde_json::json!({}));
+    let map = entry.as_object_mut().unwrap();
+    if let Some(quotes) = obj.get("quotes").and_then(|v| v.as_array()) {
+        let slot = map
+            .entry("quotes".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        let arr = slot.as_array_mut().unwrap();
+        for q in quotes {
+            let sym = q.get("symbol").and_then(|s| s.as_str()).unwrap_or("");
+            if let Some(pos) = arr
+                .iter()
+                .position(|x| x.get("symbol").and_then(|s| s.as_str()) == Some(sym))
+            {
+                arr[pos] = q.clone();
+            } else {
+                arr.push(q.clone());
+            }
+        }
+    }
+    if let Some(intra) = obj.get("intraday") {
+        map.insert("intraday".to_string(), intra.clone());
+    }
+    if let Some(mins) = obj.get("minutes").and_then(|v| v.as_array()) {
+        let slot = map
+            .entry("minutes".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        let arr = slot.as_array_mut().unwrap();
+        for m in mins {
+            let sym = m.get("symbol").and_then(|s| s.as_str()).unwrap_or("");
+            if let Some(pos) = arr
+                .iter()
+                .position(|x| x.get("symbol").and_then(|s| s.as_str()) == Some(sym))
+            {
+                arr[pos] = m.clone();
+            } else {
+                arr.push(m.clone());
+            }
+        }
+    }
+}
+
 fn main() -> wry::Result<()> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let (feed_tx, feed_rx) = std::sync::mpsc::channel::<engine::FeedCmd>();
     engine::spawn(proxy.clone(), feed_rx, UserEvent::EnginePush);
+
+    // 設定檔寫入專用背景執行緒：事件迴圈只 enqueue，避免同步磁碟 I/O 卡 UI。
+    let (save_tx, save_rx) = std::sync::mpsc::channel::<(PathBuf, Value)>();
+    std::thread::spawn(move || {
+        while let Ok((path, data)) = save_rx.recv() {
+            // 排空只留最後一筆，連點／高頻 save 不堆疊寫檔
+            let mut path = path;
+            let mut data = data;
+            while let Ok((p2, d2)) = save_rx.try_recv() {
+                path = p2;
+                data = d2;
+            }
+            if let Err(error) = save_state(&path, &data) {
+                eprintln!("無法儲存設定到 {}: {error}", path.display());
+            }
+        }
+    });
 
     let window = WindowBuilder::new()
         .with_title("XQ 風格測試 (tao + wry)")
@@ -173,6 +238,8 @@ fn main() -> wry::Result<()> {
         }
     });
 
+    let mut engine_coalesced: Option<Value> = None;
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
@@ -199,19 +266,34 @@ fn main() -> wry::Result<()> {
                 eprintln!("[ui] {msg}");
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Save { data })) => {
-                if let Some(path) = &state_file {
-                    if let Err(error) = save_state(path, &data) {
-                        eprintln!("無法儲存設定到 {}: {error}", path.display());
-                    }
+                if let Some(path) = state_file.clone() {
+                    let _ = save_tx.send((path, data));
                 }
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Feed { symbols, chart, period })) => {
                 let _ = feed_tx.send(engine::FeedCmd { symbols, chart, period });
             }
             Event::UserEvent(UserEvent::EnginePush(value)) => {
-                let _ = main_view.evaluate_script(&format!(
-                    "window.__enginePush&&window.__enginePush({value})"
-                ));
+                // hello/down：立刻送；行情：合併到 MainEventsCleared 再一次 evaluate
+                if value.get("down").is_some() {
+                    engine_coalesced = None; // 斷線後丟棄未刷行情，避免殘包晚到
+                    let _ = main_view.evaluate_script(&format!(
+                        "window.__enginePush&&window.__enginePush({value})"
+                    ));
+                } else if value.get("hello").is_some() {
+                    let _ = main_view.evaluate_script(&format!(
+                        "window.__enginePush&&window.__enginePush({value})"
+                    ));
+                } else {
+                    coalesce_engine_push(&mut engine_coalesced, value);
+                }
+            }
+            Event::MainEventsCleared => {
+                if let Some(value) = engine_coalesced.take() {
+                    let _ = main_view.evaluate_script(&format!(
+                        "window.__enginePush&&window.__enginePush({value})"
+                    ));
+                }
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Home)) => {
                 let _ = web_view.load_url(HOME_URL);
@@ -230,14 +312,14 @@ fn main() -> wry::Result<()> {
                 let json = serde_json::to_string(&url).unwrap_or_else(|_| "\"\"".into());
                 let _ = main_view.evaluate_script(&format!("window.setWebUrl && window.setWebUrl({json});"));
             }
-                        Event::UserEvent(UserEvent::MemStats { rss_mb, rss_max_mb, cpu_pct }) => {
+            Event::UserEvent(UserEvent::MemStats { rss_mb, rss_max_mb, cpu_pct }) => {
                 let script = format!(
                     "(function(){{var js=null;try{{if(performance&&performance.memory&&performance.memory.usedJSHeapSize)js=performance.memory.usedJSHeapSize/(1024*1024);}}catch(e){{}}if(window.setMemStats)window.setMemStats({{rssMb:{rss:.1},rssMaxMb:{mx:.1},cpuPct:{cpu:.1},jsHeapMb:js}});}})();",
                     rss = rss_mb, mx = rss_max_mb, cpu = cpu_pct,
                 );
                 let _ = main_view.evaluate_script(&script);
             }
-_ => {}
+            _ => {}
         }
     });
 }

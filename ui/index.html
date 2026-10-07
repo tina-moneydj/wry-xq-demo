@@ -275,7 +275,17 @@
     { symbol: "0050", name: "元大台灣50", price: 186.2,  change: +0.4 },
   ];
   const FAKE_QUOTES = QUOTES.map(q => ({ symbol: q.symbol, name: q.name, price: q.price, change: q.change }));
-  const quoteBy = s => QUOTES.find(q => q.symbol === s) || QUOTES[0];
+  /** symbol → QUOTES 列索引，upsert／增量上色用（O(1)） */
+  const quoteIndex = new Map();
+  function rebuildQuoteIndex() {
+    quoteIndex.clear();
+    for (let i = 0; i < QUOTES.length; i++) quoteIndex.set(QUOTES[i].symbol, i);
+  }
+  rebuildQuoteIndex();
+  const quoteBy = s => {
+    const i = quoteIndex.get(s);
+    return i != null ? QUOTES[i] : QUOTES[0];
+  };
   const uid = (p) => p + "-" + Math.random().toString(36).slice(2, 8);
 
   // ---- 持久化（與 chart.js 共用 window.XQ_STATE / store）----
@@ -360,8 +370,9 @@
   const groupWl = window.XQWatchlist && groupHost ? window.XQWatchlist.create(groupHost, {
     initialSymbols: store.watchlist.slice(),
     quoteLookup: (sym) => {
-      const q = QUOTES.find(x => x.symbol === sym);
-      return q || { symbol: sym, name: sym, price: 100 + (sym.charCodeAt(0) % 50), change: 0 };
+      const i = quoteIndex.get(sym);
+      if (i != null) return QUOTES[i];
+      return { symbol: sym, name: sym, price: 100 + (sym.charCodeAt(0) % 50), change: 0 };
     },
     state: store.groups,
     onSave: (shape) => {
@@ -373,7 +384,7 @@
       save();
     },
     onSelect: (row) => {
-      const qi = QUOTES.findIndex(x => x.symbol === row.symbol);
+      const qi = quoteIndex.has(row.symbol) ? quoteIndex.get(row.symbol) : -1;
       if (qi >= 0) selectQuote(qi);
       else {
         // 合成代號：仍切走勢圖到近似示範股
@@ -393,23 +404,71 @@
     // ---- 報價表 ----
   let selectedQuote = 0;
   const rows = document.getElementById("quote-rows");
+  const quoteDirty = new Set();
+  let quoteRaf = 0;
+  let quoteDomBuilt = false;
+  function paintQuoteRow(tr, q, i) {
+    const cls = q.change >= 0 ? "up" : "down";
+    const sign = q.change >= 0 ? "+" : "";
+    const denom = q.price - q.change;
+    const pct = denom ? (q.change / denom) * 100 : 0;
+    const tds = tr.children;
+    if (tds.length >= 5) {
+      tds[0].textContent = q.symbol;
+      tds[1].textContent = q.name;
+      tds[2].textContent = q.price.toFixed(2);
+      tds[2].className = cls;
+      tds[3].textContent = sign + q.change.toFixed(2);
+      tds[3].className = cls;
+      tds[4].textContent = sign + pct.toFixed(2) + "%";
+      tds[4].className = cls;
+    } else {
+      tr.innerHTML = `<td>${q.symbol}</td><td>${q.name}</td><td class="${cls}">${q.price.toFixed(2)}</td>` +
+        `<td class="${cls}">${sign}${q.change.toFixed(2)}</td><td class="${cls}">${sign}${pct.toFixed(2)}%</td>`;
+    }
+    tr.classList.toggle("sel", i === selectedQuote);
+  }
   function renderQuotes() {
     rows.innerHTML = "";
     QUOTES.forEach((q, i) => {
-      const cls = q.change >= 0 ? "up" : "down";
-      const sign = q.change >= 0 ? "+" : "";
-      const pct = (q.change / (q.price - q.change)) * 100;
       const tr = document.createElement("tr");
-      if (i === selectedQuote) tr.className = "sel";
-      tr.innerHTML = `<td>${q.symbol}</td><td>${q.name}</td><td class="${cls}">${q.price.toFixed(2)}</td>` +
-        `<td class="${cls}">${sign}${q.change.toFixed(2)}</td><td class="${cls}">${sign}${pct.toFixed(2)}%</td>`;
+      paintQuoteRow(tr, q, i);
       tr.addEventListener("click", () => selectQuote(i));
       rows.appendChild(tr);
     });
+    quoteDomBuilt = true;
+    quoteDirty.clear();
+  }
+  function scheduleQuotePaint() {
+    if (quoteRaf) return;
+    quoteRaf = requestAnimationFrame(() => {
+      quoteRaf = 0;
+      if (!quoteDomBuilt || rows.children.length !== QUOTES.length) {
+        renderQuotes();
+        return;
+      }
+      quoteDirty.forEach((i) => {
+        const tr = rows.children[i];
+        const q = QUOTES[i];
+        if (tr && q) paintQuoteRow(tr, q, i);
+      });
+      quoteDirty.clear();
+    });
+  }
+  function markQuotesDirty(indices) {
+    if (!indices || !indices.length) return;
+    for (let k = 0; k < indices.length; k++) quoteDirty.add(indices[k]);
+    scheduleQuotePaint();
   }
   function selectQuote(i, opts) {
+    const prev = selectedQuote;
     selectedQuote = i;
-    renderQuotes();
+    // 點選只重畫選取態，勿整表重建
+    if (quoteDomBuilt && rows.children.length === QUOTES.length) {
+      markQuotesDirty([prev, i].filter(x => x >= 0 && x < QUOTES.length));
+    } else {
+      renderQuotes();
+    }
     const q = QUOTES[i];
     // 更新目前走勢圖分頁的代號
     const ctab = store.panes.top.tabs.find(t => t.id === store.panes.top.active);
@@ -494,8 +553,9 @@
     paintFeedSwitch();
     if (store.ui.feed === "fake") {
       FAKE_QUOTES.forEach(srcq => {
-        const row = QUOTES.find(q => q.symbol === srcq.symbol);
-        if (!row) return;
+        const i = quoteIndex.get(srcq.symbol);
+        if (i == null) return;
+        const row = QUOTES[i];
         row.name = srcq.name;
         row.price = srcq.price;
         row.change = srcq.change;
@@ -515,16 +575,22 @@
     if (src) applyFeedSource(src, true);
   });
   function upsertQuote(q) {
-    let row = QUOTES.find(x => x.symbol === q.symbol);
-    if (!row) {
+    let i = quoteIndex.get(q.symbol);
+    let row;
+    if (i == null) {
       row = { symbol: q.symbol, name: q.name || q.symbol, price: q.price, change: q.change };
+      i = QUOTES.length;
       QUOTES.push(row);
+      quoteIndex.set(q.symbol, i);
+      quoteDomBuilt = false; // 結構變了，下次全量建表
+    } else {
+      row = QUOTES[i];
     }
     if (q.name) row.name = q.name;
     row.price = q.price;
     row.change = q.change;
     row.volume = q.volume;
-    return row;
+    return i;
   }
   window.__enginePush = function (msg) {
     const el = document.getElementById("engine-state");
@@ -540,8 +606,12 @@
     if (feedSource() !== "engine") return;
     if (msg.quotes && msg.quotes.length) {
       const chartSym = chart.getContext && chart.getContext().symbol;
+      const dirtyIdx = [];
+      const dirtySyms = [];
       msg.quotes.forEach(q => {
-        const row = upsertQuote(q);
+        const i = upsertQuote(q);
+        dirtyIdx.push(i);
+        dirtySyms.push(q.symbol);
         const first = chart.anchorLive(q.symbol);
         if (chartSym === q.symbol && !first) {
           const tick = { symbol: q.symbol, price: q.price, change: q.change };
@@ -551,8 +621,8 @@
         }
       });
       if (groupWl && groupWl.applyEngineQuotes) groupWl.applyEngineQuotes(msg.quotes);
-      renderQuotes();
-      renderWatch();
+      markQuotesDirty(dirtyIdx);
+      markWatchDirtyForSymbols(dirtySyms);
       refreshChartTitle();
       if (el && el.textContent !== "行情連線") el.textContent = "行情連線";
     }
@@ -570,27 +640,72 @@
   };
 
   // ---- 自選 ----
+  const watchDirty = new Set();
+  let watchRaf = 0;
+  let watchDomBuilt = false;
+  function paintWatchRow(tr, q, i) {
+    const cls = q.change >= 0 ? "up" : "down";
+    const tds = tr.children;
+    if (tds.length >= 4) {
+      tds[0].textContent = q.symbol;
+      tds[1].textContent = q.name;
+      tds[2].textContent = q.price.toFixed(2);
+      tds[2].className = cls;
+    } else {
+      tr.innerHTML = `<td>${q.symbol}</td><td>${q.name}</td><td class="${cls}">${q.price.toFixed(2)}</td>` +
+        `<td><button type="button" data-i="${i}" class="wdel">×</button></td>`;
+    }
+  }
+  function bindWatchRow(tr, q, i) {
+    tr.onclick = e => {
+      if (e.target.classList.contains("wdel")) return;
+      const qi = quoteIndex.has(q.symbol) ? quoteIndex.get(q.symbol) : -1;
+      if (qi >= 0) selectQuote(qi);
+    };
+    const del = tr.querySelector(".wdel");
+    if (del) del.onclick = e => {
+      e.stopPropagation();
+      store.watchlist.splice(i, 1);
+      save(); renderWatch(); sendFeed();
+    };
+  }
   function renderWatch() {
     const tb = document.getElementById("watch-rows");
     tb.innerHTML = "";
     store.watchlist.forEach((sym, i) => {
       const q = quoteBy(sym);
-      const cls = q.change >= 0 ? "up" : "down";
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${q.symbol}</td><td>${q.name}</td><td class="${cls}">${q.price.toFixed(2)}</td>` +
-        `<td><button type="button" data-i="${i}" class="wdel">×</button></td>`;
-      tr.addEventListener("click", e => {
-        if (e.target.classList.contains("wdel")) return;
-        const qi = QUOTES.findIndex(x => x.symbol === q.symbol);
-        if (qi >= 0) selectQuote(qi);
-      });
-      tr.querySelector(".wdel").addEventListener("click", e => {
-        e.stopPropagation();
-        store.watchlist.splice(i, 1);
-        save(); renderWatch();
-      });
+      paintWatchRow(tr, q, i);
+      bindWatchRow(tr, q, i);
       tb.appendChild(tr);
     });
+    watchDomBuilt = true;
+    watchDirty.clear();
+  }
+  function scheduleWatchPaint() {
+    if (watchRaf) return;
+    watchRaf = requestAnimationFrame(() => {
+      watchRaf = 0;
+      const tb = document.getElementById("watch-rows");
+      if (!watchDomBuilt || tb.children.length !== store.watchlist.length) {
+        renderWatch();
+        return;
+      }
+      watchDirty.forEach((i) => {
+        const sym = store.watchlist[i];
+        const tr = tb.children[i];
+        if (tr && sym) paintWatchRow(tr, quoteBy(sym), i);
+      });
+      watchDirty.clear();
+    });
+  }
+  function markWatchDirtyForSymbols(syms) {
+    if (!syms || !syms.length) return;
+    const want = new Set(syms);
+    for (let i = 0; i < store.watchlist.length; i++) {
+      if (want.has(store.watchlist[i])) watchDirty.add(i);
+    }
+    if (watchDirty.size) scheduleWatchPaint();
   }
   document.getElementById("watch-add").addEventListener("click", () => {
     const v = document.getElementById("watch-input").value.trim().toUpperCase();
