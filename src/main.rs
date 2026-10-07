@@ -1,7 +1,8 @@
-// XQ 風格的測試程式：Rust (tao) 開視窗，裡面放兩個 webview。
+// XQ 風格的測試程式：Rust (tao) 開視窗，主 UI + 可選的右下子 webview。
 // - 主 webview：鋪滿整個視窗，用 HTML/CSS/JS 畫出走勢圖、報價、分割線。
-// - 子 webview：疊在右下格上面，載入真正的網站（不受 X-Frame-Options 限制）。
-//   網頁分頁切走後延遲卸載／載入（保暖）；占位遮罩減少白閃；逾時再釋放 RSS。
+// - 子 webview：僅在開啟真實 http(s) 時建立，疊在右下格載入網站。
+//   about:blank／首頁＝銷毀子 webview，回收 WebKitWebProcess（約 250–300 MB）。
+//   真實網頁分頁之間仍可延遲卸載保暖；空白才銷毀是省記憶體的關鍵。
 // 網頁 JS 會把右下格的位置用 window.ipc.postMessage 傳回來，Rust 再呼叫 set_bounds。
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -18,7 +19,7 @@ use tao::{
     event_loop::{ControlFlow, EventLoopBuilder},
     window::{Window, WindowBuilder},
 };
-use wry::{PageLoadEvent, Rect, WebViewBuilder};
+use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
 const HOME_URL: &str = "about:blank";
 const UI_HTML: &str = include_str!("../ui/index.html");
@@ -194,28 +195,15 @@ fn main() -> wry::Result<()> {
     #[cfg(not(target_os = "linux"))]
     let main_view = build(main_builder)?;
 
-    // 2) 子 webview（後建立，疊在主 webview 上面）。先給 1x1，等 JS 回報右下格位置再搬過去。
-    let load_proxy = proxy.clone();
-    let popup_proxy = proxy.clone();
-    // 子 webview 先 about:blank；作用中網頁分頁由 JS 再載入，避免與 state 重複白載重站。
-    let web_view = build(
-        WebViewBuilder::new()
-            .with_bounds(Rect {
-                position: PhysicalPosition::new(0, 0).into(),
-                size: PhysicalSize::new(1u32, 1u32).into(),
-            })
-            .with_url("about:blank")
-            .with_on_page_load_handler(move |event, url| {
-                if let PageLoadEvent::Finished = event {
-                    let _ = load_proxy.send_event(UserEvent::ChildLoaded(url));
-                }
-            })
-            // 網站用 target=_blank 開新視窗時，改成在同一格裡開。
-            .with_new_window_req_handler(move |url, _features| {
-                let _ = popup_proxy.send_event(UserEvent::Navigate(url));
-                wry::NewWindowResponse::Deny
-            }),
-    )?;
+    // 2) 子 webview：懶建立。空白右下不建第二個 WebKit，省約 250–300 MB RSS。
+    //    開啟 http(s) 時再建；about:blank／Home 時 drop 銷毀。
+    let mut web_view: Option<WebView> = None;
+    let mut child_bounds = Rect {
+        position: PhysicalPosition::new(0, 0).into(),
+        size: PhysicalSize::new(1u32, 1u32).into(),
+    };
+    // `build` 僅非 Linux 主 webview 用；子 webview 一律 build_as_child（Linux 亦然）。
+    let _ = build;
 
     // 記憶體狀態列：背景執行緒每 1 秒取樣 RSS（含 WebKit 子行程），不走行情 tick 路徑。
     let mem_proxy = proxy.clone();
@@ -254,14 +242,21 @@ fn main() -> wry::Result<()> {
                 let _ = main_view.set_bounds(full_window_rect(&window));
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Bounds { x, y, w, h })) => {
-                let _ = web_view.set_bounds(Rect {
+                child_bounds = Rect {
                     position: PhysicalPosition::new(x.round() as i32, y.round() as i32).into(),
                     size: PhysicalSize::new(w.max(1.0).round() as u32, h.max(1.0).round() as u32).into(),
-                });
+                };
+                if let Some(wv) = web_view.as_ref() {
+                    let _ = wv.set_bounds(child_bounds);
+                }
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Quote { symbol })) => {
                 if let Some(url) = quote_url(&symbol) {
-                    let _ = web_view.load_url(&url);
+                    if let Err(error) =
+                        ensure_child_webview(&window, &proxy, &mut web_view, child_bounds, &url)
+                    {
+                        eprintln!("無法建立子 webview: {error}");
+                    }
                 }
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Log { msg })) => {
@@ -298,17 +293,27 @@ fn main() -> wry::Result<()> {
                 }
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Home)) => {
-                let _ = web_view.load_url(HOME_URL);
+                destroy_child_webview(&mut web_view, &proxy);
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Open { url })) => {
-                // about:blank = 延遲卸載後釋放 WebKit 記憶體；其餘為分頁 URL
-                if url == "about:blank" || url.starts_with("https://") || url.starts_with("http://") {
-                    let _ = web_view.load_url(&url);
+                // about:blank = 銷毀子 webview 釋放 WebKit RSS；其餘為真實分頁 URL
+                if url == "about:blank" || url.starts_with("about:") {
+                    destroy_child_webview(&mut web_view, &proxy);
+                } else if url.starts_with("https://") || url.starts_with("http://") {
+                    if let Err(error) =
+                        ensure_child_webview(&window, &proxy, &mut web_view, child_bounds, &url)
+                    {
+                        eprintln!("無法建立子 webview: {error}");
+                    }
                 }
             }
             Event::UserEvent(UserEvent::Navigate(url)) => {
                 if url.starts_with("https://") || url.starts_with("http://") {
-                    let _ = web_view.load_url(&url);
+                    if let Err(error) =
+                        ensure_child_webview(&window, &proxy, &mut web_view, child_bounds, &url)
+                    {
+                        eprintln!("無法建立子 webview: {error}");
+                    }
                 }
             }
             Event::UserEvent(UserEvent::ChildLoaded(url)) => {
@@ -328,6 +333,50 @@ fn main() -> wry::Result<()> {
             _ => {}
         }
     });
+}
+
+
+/// 銷毀右下子 webview（drop → WebKitWebProcess / NetworkProcess 退出），並通知 JS 空白占位。
+fn destroy_child_webview(
+    web_view: &mut Option<WebView>,
+    proxy: &tao::event_loop::EventLoopProxy<UserEvent>,
+) {
+    if web_view.take().is_some() {
+        // drop 即銷毀；稍後再通知，讓行程有機會先回收
+    }
+    let _ = proxy.send_event(UserEvent::ChildLoaded(HOME_URL.to_string()));
+}
+
+/// 確保子 webview 存在並載入 url；沿用上次 web-slot bounds。
+fn ensure_child_webview(
+    window: &Window,
+    proxy: &tao::event_loop::EventLoopProxy<UserEvent>,
+    web_view: &mut Option<WebView>,
+    bounds: Rect,
+    url: &str,
+) -> wry::Result<()> {
+    if let Some(wv) = web_view.as_ref() {
+        let _ = wv.set_bounds(bounds);
+        let _ = wv.load_url(url);
+        return Ok(());
+    }
+    let load_proxy = proxy.clone();
+    let popup_proxy = proxy.clone();
+    let wv = WebViewBuilder::new()
+        .with_bounds(bounds)
+        .with_url(url)
+        .with_on_page_load_handler(move |event, loaded| {
+            if let PageLoadEvent::Finished = event {
+                let _ = load_proxy.send_event(UserEvent::ChildLoaded(loaded));
+            }
+        })
+        .with_new_window_req_handler(move |nav_url, _features| {
+            let _ = popup_proxy.send_event(UserEvent::Navigate(nav_url));
+            wry::NewWindowResponse::Deny
+        })
+        .build_as_child(window)?;
+    *web_view = Some(wv);
+    Ok(())
 }
 
 /// 整個視窗內容區（實體像素）。

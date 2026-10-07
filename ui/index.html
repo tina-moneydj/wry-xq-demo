@@ -500,16 +500,20 @@
       applyChartTab(ctab);
       renderTabbar("top");
     }
-    // 更新目前網頁分頁網址並載入
+    // 右下預設空白：只有目前已是 Yahoo 報價頁時，才跟著代號切換（不主動載入）
     if (!opts || opts.navigate !== false) {
       const wtab = store.panes.right.tabs.find(t => t.id === store.panes.right.active);
       if (wtab && wtab.kind === "web") {
-        wtab.url = `https://tw.stock.yahoo.com/quote/${q.symbol}.TW`;
-        wtab.title = q.symbol;
-        renderTabbar("right");
-        webChildTabId = wtab.id;
-        send({ type: "open", url: wtab.url });
-        setWebUrlDisplay(wtab.url);
+        const cur = String(wtab.url || "");
+        const onYahoo = /tw\.stock\.yahoo\.com\/quote\//i.test(cur);
+        if (onYahoo) {
+          wtab.url = `https://tw.stock.yahoo.com/quote/${q.symbol}.TW`;
+          wtab.title = q.symbol;
+          renderTabbar("right");
+          webChildTabId = wtab.id;
+          send({ type: "open", url: wtab.url });
+          setWebUrlDisplay(wtab.url);
+        }
       }
     }
     save();
@@ -941,7 +945,7 @@
     cancelWebDefer();
     // 同一分頁已在子 webview：立刻顯示（保暖命中）
     if (webChildTabId === tab.id && !webLoading) {
-      // 空白分頁只顯示深色占位，不要露出 about:blank 白頁
+      // 空白＝深色占位，並確保銷毀子 webview（首頁／切空白不可只 park）
       if (isBlank) {
         setWebCover({
           show: true,
@@ -950,6 +954,7 @@
           showEagerBtn: false,
         });
         parkChildWeb();
+        send({ type: "open", url: "about:blank" });
         return;
       }
       setWebCover({ show: false });
