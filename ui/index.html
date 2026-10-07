@@ -285,7 +285,9 @@
 <script>/*__WATCHLIST_JS__*/</script>
 <script>
 (() => {
-  const HOME_URL = "https://www.twse.com.tw/zh/";
+  /** 右下網頁分頁預設／首頁：空白頁（省記憶體、不預載重站） */
+  const HOME_URL = "about:blank";
+  const TWSE_URL = "https://www.twse.com.tw/zh/";
   /** 上方走勢圖分頁軟上限（可同時開著，各自獨立代號／週期／畫線／指標） */
   const MAX_CHART_TABS = 16;
   const QUOTES = [
@@ -335,7 +337,7 @@
       },
       right: {
         active: "web-1",
-        tabs: [{ id: "web-1", kind: "web", title: "證交所", url: HOME_URL }],
+        tabs: [{ id: "web-1", kind: "web", title: "空白", url: HOME_URL }],
       },
     };
   }
@@ -771,10 +773,12 @@
 
   function setWebUrlDisplay(url) {
     const el = document.getElementById("web-url");
-    el.textContent = url;
-    el.title = url;
+    const blank = !url || url === "about:blank" || String(url).startsWith("about:");
+    el.textContent = blank ? "（空白）" : url;
+    el.title = blank ? "about:blank" : url;
   }
   function shortWebTitle(url) {
+    if (!url || url === "about:blank" || String(url).startsWith("about:")) return "空白";
     try {
       const u = new URL(url);
       if (u.hostname.includes("yahoo")) {
@@ -783,7 +787,7 @@
         return "Yahoo 股市";
       }
       if (u.hostname.includes("twse")) return "證交所";
-      return u.hostname.replace(/^www\./, "");
+      return u.hostname.replace(/^www\./, "") || "網頁";
     } catch (_) { return "網頁"; }
   }
   function setWebCover(opts) {
@@ -886,12 +890,22 @@
   window.onChildLoaded = url => {
     webLoading = false;
     if (!url || url === "about:blank" || String(url).startsWith("about:")) {
-      setWebCover({
-        show: true,
-        title: "",
-        detail: "已卸載以節省記憶體（切回分頁會重新載入）",
-        showEagerBtn: false,
-      });
+      // webChildTabId 有值＝作用中分頁刻意空白；null＝延遲卸載釋放 RSS
+      if (webChildTabId != null) {
+        setWebCover({
+          show: true,
+          title: "空白網頁",
+          detail: "輸入網址或從＋選單開啟網站",
+          showEagerBtn: false,
+        });
+      } else {
+        setWebCover({
+          show: true,
+          title: "",
+          detail: "已卸載以節省記憶體（切回分頁會重新載入）",
+          showEagerBtn: false,
+        });
+      }
       parkChildWeb();
       return;
     }
@@ -922,10 +936,22 @@
     opts = opts || {};
     if (!tab) return;
     const url = tab.url || HOME_URL;
+    const isBlank = !url || url === "about:blank" || String(url).startsWith("about:");
     setWebUrlDisplay(url);
     cancelWebDefer();
     // 同一分頁已在子 webview：立刻顯示（保暖命中）
     if (webChildTabId === tab.id && !webLoading) {
+      // 空白分頁只顯示深色占位，不要露出 about:blank 白頁
+      if (isBlank) {
+        setWebCover({
+          show: true,
+          title: "空白網頁",
+          detail: "輸入網址或從＋選單開啟網站",
+          showEagerBtn: false,
+        });
+        parkChildWeb();
+        return;
+      }
       setWebCover({ show: false });
       showChildWeb();
       return;
@@ -943,15 +969,16 @@
     const tab = store.panes.right.tabs.find(t => t.id === store.panes.right.active);
     if (tab && tab.kind === "web") {
       tab.url = HOME_URL;
-      tab.title = "證交所";
+      tab.title = "空白";
       save(); renderTabbar("right");
       activateWebTab(tab, { eager: true });
       return;
     }
     cancelWebDefer();
-    setWebCover({ show: true, title: "證交所", detail: "載入中…", showEagerBtn: false });
+    setWebCover({ show: true, title: "空白網頁", detail: "載入中…", showEagerBtn: false });
     parkChildWeb();
     webLoading = true;
+    webChildTabId = null;
     send({ type: "home" });
     setWebUrlDisplay(HOME_URL);
   });
@@ -1042,7 +1069,8 @@
             { label: "記事", action: () => addLeftTab("note", "記事") },
           ]
         : [
-            { label: "新網頁（首頁）", action: () => addWebTab(HOME_URL, "證交所") },
+            { label: "新網頁（空白）", action: () => addWebTab(HOME_URL, "空白") },
+            { label: "證交所", action: () => addWebTab(TWSE_URL, "證交所") },
             { label: "Yahoo 台積電", action: () => addWebTab("https://tw.stock.yahoo.com/quote/2330.TW", "2330") },
           ];
     items.forEach(it => {

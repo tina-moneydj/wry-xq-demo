@@ -20,7 +20,7 @@ use tao::{
 };
 use wry::{PageLoadEvent, Rect, WebViewBuilder};
 
-const HOME_URL: &str = "https://www.twse.com.tw/zh/";
+const HOME_URL: &str = "about:blank";
 const UI_HTML: &str = include_str!("../ui/index.html");
 // with_html 不能載入相對路徑的檔案，所以把走勢圖程式直接塞進 HTML 裡。
 const CHART_JS: &str = include_str!("../ui/chart.js");
