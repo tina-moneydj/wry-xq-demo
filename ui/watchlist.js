@@ -420,6 +420,18 @@
       persistShape();
     }
 
+    /** XQ_TICK_BENCH：載入暫時表格（不寫進組合設定、不落地），engine 報價可 O(1) 對到每一列 */
+    function loadTransient(symList) {
+      data = makeFromSymbols(symList, quoteLookup);
+      data.tickbench = true;
+      rebuildSymIndex();
+      dirtyRows.clear();
+      selectedRow = -1;
+      elBody.scrollTop = 0;
+      scrollTop = 0;
+      schedulePaint(true);
+    }
+
     function refreshGroupSelect() {
       elGroups.innerHTML = "";
       groupsMeta.forEach(g => {
@@ -471,7 +483,10 @@
       schedulePaint(true);
     }, { passive: true });
 
-    elRows.addEventListener("click", e => {
+    // 用 mousedown 選列：高頻跳價時可見列每幀重建 innerHTML，按下和放開之間格子已被換掉，
+    // 瀏覽器就不送 click（實測 1 萬筆/秒時點正在跳價的列幾乎全被吃掉）。
+    elRows.addEventListener("mousedown", e => {
+      if (e.button !== 0) return;
       const rowEl = e.target.closest(".xq-wl-row");
       if (!rowEl) return;
       const ri = +rowEl.dataset.ri;
@@ -640,7 +655,9 @@
 
     /** engine 報價：O(1) 對列，可見列排進 dirty。合成壓測表不覆寫。 */
     function applyEngineQuotes(rows) {
-      if (!data || data.synthetic || !rows || data.count > 8000) return 0;
+      // 高頻進價壓測（XQ_TICK_BENCH）的 5 萬列表格例外：代號唯一、要接 engine 報價
+      if (!data || !rows) return 0;
+      if (!data.tickbench && (data.synthetic || data.count > 8000)) return 0;
       if (symIndex.size !== data.count) rebuildSymIndex();
       let n = 0;
       for (let r = 0; r < rows.length; r++) {
@@ -848,6 +865,7 @@
       }),
       reload: () => schedulePaint(true),
       applyEngineQuotes,
+      loadTransient,
       applyTicks,
       startTicks,
       stopTicks,

@@ -21,12 +21,16 @@ pub struct FeedCmd {
 
 pub fn spawn<T: Send + 'static>(proxy: EventLoopProxy<T>, rx: Receiver<FeedCmd>, mut to_event: impl FnMut(Value) -> T + Send + 'static) {
     thread::spawn(move || {
-        let addr: SocketAddr = ([127, 0, 0, 1], PORT).into();
+        // XQ_FEED_ADDR=host:port 可覆寫（壓測／開發用，同 GPUI 版）；預設 127.0.0.1:47631
+        let addr: SocketAddr = std::env::var("XQ_FEED_ADDR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| ([127, 0, 0, 1], PORT).into());
         let mut latest: Option<FeedCmd> = None;
         loop {
             match TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
                 Ok(stream) => {
-                    eprintln!("[engine] 已連上 XQNext 127.0.0.1:{PORT}");
+                    eprintln!("[engine] 已連上 XQNext {addr}");
                     if let Err(error) = session(stream, &rx, &mut latest, &proxy, &mut to_event) {
                         eprintln!("[engine] 連線中斷: {error}");
                     }
@@ -57,6 +61,7 @@ fn session<T>(
     }
     // 讀取逾時時保留已到的位元組，避免半包被丟掉後整條連線錯位。
     let mut pending = Vec::new();
+    let bench = tick_bench_enabled();
     loop {
         loop {
             match rx.try_recv() {
@@ -70,7 +75,10 @@ fn session<T>(
         }
         match read_frame(&mut stream, &mut pending) {
             Ok(payload) => {
-                if let Some(value) = decode(&payload) {
+                if let Some(mut value) = decode(&payload) {
+                    if bench {
+                        annotate_stamp(&payload, &mut value);
+                    }
                     let _ = proxy.send_event(to_event(value));
                 }
             }
@@ -78,6 +86,31 @@ fn session<T>(
             Err(error) => return Err(error),
         }
     }
+}
+
+/// XQ_TICK_BENCH=1（高頻進價壓測，預設關閉）：解析產生器附在報價包尾端的
+/// `b"XQTS" + seq u64 + sent_us u64`（見 gpui-xq-demo/crates/xq-feed），一般解碼本來就忽略這段尾巴。
+pub fn tick_bench_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("XQ_TICK_BENCH").is_some_and(|v| v != "0"))
+}
+
+pub fn unix_us() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0)
+}
+
+/// 在解碼結果加上 `stamp: [seq, sent_us, recv_us]` 與 `raw: 筆數`（未合併）。
+fn annotate_stamp(payload: &[u8], value: &mut Value) {
+    let Some(obj) = value.as_object_mut() else { return };
+    let Some(n) = obj.get("quotes").and_then(|q| q.as_array()).map(|a| a.len()) else { return };
+    obj.insert("raw".into(), json!(n));
+    if payload.len() < 23 || payload[payload.len() - 20..payload.len() - 16] != *b"XQTS" {
+        return;
+    }
+    let t = &payload[payload.len() - 16..];
+    let seq = u64::from_le_bytes(t[..8].try_into().unwrap());
+    let sent = u64::from_le_bytes(t[8..].try_into().unwrap());
+    obj.insert("stamp".into(), json!([seq, sent, unix_us()]));
 }
 
 fn write_subscribe(stream: &mut TcpStream, cmd: &FeedCmd) -> std::io::Result<()> {

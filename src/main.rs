@@ -6,6 +6,7 @@
 // 網頁 JS 會把右下格的位置用 window.ipc.postMessage 傳回來，Rust 再呼叫 set_bounds。
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -61,34 +62,49 @@ enum UserEvent {
 
 
 /// 合併同一幀內多包 Engine 推送：報價／分鐘線各代號只留最新，分時整包覆蓋，減少 evaluate_script。
-fn coalesce_engine_push(dst: &mut Option<Value>, src: Value) {
-    let Some(obj) = src.as_object() else {
+/// `quote_pos` 是 dst.quotes 裡「代號 → 位置」的索引（每次 flush 清空），合併是 O(1)／筆；
+/// 原本每筆線性搜尋，同一批代號很多時（5 萬檔快照、高頻大量代號）會變 O(n²) 卡死主執行緒。
+fn coalesce_engine_push(dst: &mut Option<Value>, quote_pos: &mut HashMap<String, usize>, src: Value) {
+    let Value::Object(mut obj) = src else {
         *dst = Some(src);
         return;
     };
     let entry = dst.get_or_insert_with(|| serde_json::json!({}));
     let map = entry.as_object_mut().unwrap();
-    if let Some(quotes) = obj.get("quotes").and_then(|v| v.as_array()) {
+    if let Some(Value::Array(quotes)) = obj.remove("quotes") {
         let slot = map
             .entry("quotes".to_string())
             .or_insert_with(|| serde_json::json!([]));
         let arr = slot.as_array_mut().unwrap();
         for q in quotes {
             let sym = q.get("symbol").and_then(|s| s.as_str()).unwrap_or("");
-            if let Some(pos) = arr
-                .iter()
-                .position(|x| x.get("symbol").and_then(|s| s.as_str()) == Some(sym))
-            {
-                arr[pos] = q.clone();
-            } else {
-                arr.push(q.clone());
+            match quote_pos.get(sym) {
+                Some(&pos) => arr[pos] = q,
+                None => {
+                    quote_pos.insert(sym.to_string(), arr.len());
+                    arr.push(q);
+                }
             }
         }
     }
-    if let Some(intra) = obj.get("intraday") {
-        map.insert("intraday".to_string(), intra.clone());
+    // XQ_TICK_BENCH：保留這批最早／最新的時間戳，raw 筆數累加、合併包數 nev
+    if let Some(st) = obj.remove("stamp") {
+        if !map.contains_key("stamp0") {
+            map.insert("stamp0".to_string(), st.clone());
+        }
+        map.insert("stamp".to_string(), st);
     }
-    if let Some(mins) = obj.get("minutes").and_then(|v| v.as_array()) {
+    if let Some(raw) = obj.get("raw").and_then(|v| v.as_u64()) {
+        let prev = map.get("raw").and_then(|v| v.as_u64()).unwrap_or(0);
+        map.insert("raw".to_string(), serde_json::json!(prev + raw));
+        let nev = map.get("nev").and_then(|v| v.as_u64()).unwrap_or(0);
+        map.insert("nev".to_string(), serde_json::json!(nev + 1));
+    }
+    if let Some(intra) = obj.remove("intraday") {
+        map.insert("intraday".to_string(), intra);
+    }
+    if let Some(Value::Array(mins)) = obj.remove("minutes") {
+        // 分鐘線只有走勢圖那一檔，量很小，線性即可
         let slot = map
             .entry("minutes".to_string())
             .or_insert_with(|| serde_json::json!([]));
@@ -99,9 +115,9 @@ fn coalesce_engine_push(dst: &mut Option<Value>, src: Value) {
                 .iter()
                 .position(|x| x.get("symbol").and_then(|s| s.as_str()) == Some(sym))
             {
-                arr[pos] = m.clone();
+                arr[pos] = m;
             } else {
-                arr.push(m.clone());
+                arr.push(m);
             }
         }
     }
@@ -193,7 +209,7 @@ fn main() -> wry::Result<()> {
         if tab_stress { " window.XQ_TAB_STRESS = true;" } else { "" },
         if group_stress { " window.XQ_GROUP_STRESS = true;" } else { "" },
         if wheel_perf { " window.XQ_WHEEL_PERF = true;" } else { "" }
-    );
+    ) + if engine::tick_bench_enabled() { " window.XQ_TICK_BENCH = true;" } else { "" };
 
     // 1) 主 webview（先建立，在下層）。
     let ipc_proxy = proxy.clone();
@@ -259,6 +275,8 @@ fn main() -> wry::Result<()> {
     });
 
     let mut engine_coalesced: Option<Value> = None;
+    let mut engine_quote_pos: HashMap<String, usize> = HashMap::new();
+    let tick_bench = engine::tick_bench_enabled();
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -304,6 +322,7 @@ fn main() -> wry::Result<()> {
                 // hello/down：立刻送；行情：合併到 MainEventsCleared 再一次 evaluate
                 if value.get("down").is_some() {
                     engine_coalesced = None; // 斷線後丟棄未刷行情，避免殘包晚到
+                    engine_quote_pos.clear();
                     let _ = main_view.evaluate_script(&format!(
                         "window.__enginePush&&window.__enginePush({value})"
                     ));
@@ -312,11 +331,17 @@ fn main() -> wry::Result<()> {
                         "window.__enginePush&&window.__enginePush({value})"
                     ));
                 } else {
-                    coalesce_engine_push(&mut engine_coalesced, value);
+                    coalesce_engine_push(&mut engine_coalesced, &mut engine_quote_pos, value);
                 }
             }
             Event::MainEventsCleared => {
-                if let Some(value) = engine_coalesced.take() {
+                if let Some(mut value) = engine_coalesced.take() {
+                    engine_quote_pos.clear();
+                    if tick_bench {
+                        if let Some(obj) = value.as_object_mut() {
+                            obj.insert("evalUs".into(), serde_json::json!(engine::unix_us()));
+                        }
+                    }
                     let _ = main_view.evaluate_script(&format!(
                         "window.__enginePush&&window.__enginePush({value})"
                     ));

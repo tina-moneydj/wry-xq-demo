@@ -387,6 +387,51 @@
     chart.resize({ defer: true });
   }
 
+  // ---- 高頻進價壓測（XQ_TICK_BENCH=1，預設關閉；產生器 gpui-xq-demo/crates/xq-feed 的 xq-tickgen）----
+  // 延遲：Rust 收包時間 recv、evaluate 時間 evalUs、JS 套用 applied、套用後第二個 rAF 為 present（上界，最多多算約 1 幀）。
+  const TB = window.XQ_TICK_BENCH
+    ? { raw: 0, rows: 0, applied: 0, pushes: 0, pushMs: 0, nev: 0, frames: 0, lat: [], sw: [], agg: null }
+    : null;
+  const nowUs = () => Math.round((performance.timeOrigin + performance.now()) * 1000);
+  function tbOnPush(msg, n, ms) {
+    TB.raw += msg.raw || 0;
+    TB.rows += msg.quotes.length;
+    TB.applied += n;
+    TB.pushes++;
+    TB.pushMs += ms;
+    TB.nev += msg.nev || 0;
+    if (!msg.stamp) return;
+    const applied = nowUs();
+    if (TB.agg) {
+      TB.agg.last = msg.stamp;
+      TB.agg.applied = applied;
+      TB.agg.evalUs = msg.evalUs || 0;
+      return;
+    }
+    TB.agg = { first: msg.stamp0 || msg.stamp, last: msg.stamp, applied, evalUs: msg.evalUs || 0 };
+    // 第一個 rAF：這一幀開始（本幀之前套用的都會畫進這幀）；第二個 rAF：這幀已畫完
+    requestAnimationFrame(() => {
+      const a = TB.agg;
+      TB.agg = null;
+      requestAnimationFrame(() => {
+        TB.lat.push([a.first[0], a.first[1], a.last[0], a.last[1], a.last[2], a.applied, nowUs(), a.evalUs]);
+      });
+    });
+  }
+  if (TB) {
+    requestAnimationFrame(function beat() { TB.frames++; requestAnimationFrame(beat); });
+    setInterval(() => {
+      const rep = {
+        now: nowUs(), dateUs: Date.now() * 1000, fps: TB.frames, raw: TB.raw, rows: TB.rows, applied: TB.applied,
+        pushes: TB.pushes, pushMs: +TB.pushMs.toFixed(1), nev: TB.nev,
+        heapMb: performance.memory ? +(performance.memory.usedJSHeapSize / 1048576).toFixed(1) : null,
+        quotes: QUOTES.length, lat: TB.lat, sw: TB.sw,
+      };
+      TB.frames = 0; TB.lat = []; TB.sw = [];
+      send({ type: "log", msg: "TICKBENCH|" + JSON.stringify(rep) });
+    }, 1000);
+  }
+
   // ---- 組合（虛擬化報價表）----
   const groupHost = document.getElementById("group-watchlist");
   const groupWl = window.XQWatchlist && groupHost ? window.XQWatchlist.create(groupHost, {
@@ -406,6 +451,10 @@
       save();
     },
     onSelect: (row) => {
+      if (TB) {
+        const handled = nowUs();
+        requestAnimationFrame(() => requestAnimationFrame(() => TB.sw.push([row.symbol, handled, nowUs()])));
+      }
       const qi = quoteIndex.has(row.symbol) ? quoteIndex.get(row.symbol) : -1;
       if (qi >= 0) selectQuote(qi);
       else {
@@ -422,6 +471,14 @@
       }
     },
   }) : null;
+  if (TB && groupWl) {
+    // 與 GPUI 版同表：33 檔自選＋Z00000…Z49999（5 萬合成列，代號唯一）
+    const syms = ["2330","2317","2454","0050","2303","2881","2882","2308","2412","2382","3711","2891","2886","1301","1303",
+      "2002","3008","2357","2603","2609","3231","6505","2884","2892","5880","2207","1216","2379","3034","2345",
+      "AAPL","TSLA","NVDA"];
+    for (let k = 0; k < 50000; k++) syms.push("Z" + String(k).padStart(5, "0"));
+    groupWl.loadTransient(syms);
+  }
 
     // ---- 報價表 ----
   let selectedQuote = 0;
@@ -637,10 +694,13 @@
         window.__benchQuote = true;
         requestAnimationFrame(() => requestAnimationFrame(() => send({ type: "log", msg: "BENCH first-quote" })));
       }
+      const tbT0 = TB ? performance.now() : 0;
       const chartSym = chart.getContext && chart.getContext().symbol;
       const dirtyIdx = [];
       const dirtySyms = [];
       msg.quotes.forEach(q => {
+        // 壓測合成列（Z…）只進組合表，不進左側報價清單（正式 feed 只會送有訂閱的代號）
+        if (TB && q.symbol.charCodeAt(0) === 90) return;
         const i = upsertQuote(q);
         dirtyIdx.push(i);
         dirtySyms.push(q.symbol);
@@ -652,10 +712,11 @@
           chart.updateQuote(tick);
         }
       });
-      if (groupWl && groupWl.applyEngineQuotes) groupWl.applyEngineQuotes(msg.quotes);
+      const nGroup = groupWl && groupWl.applyEngineQuotes ? groupWl.applyEngineQuotes(msg.quotes) : 0;
       markQuotesDirty(dirtyIdx);
       markWatchDirtyForSymbols(dirtySyms);
       refreshChartTitle();
+      if (TB) tbOnPush(msg, nGroup, performance.now() - tbT0);
       if (el && el.textContent !== "行情連線") el.textContent = "行情連線";
     }
     if (msg.intraday && msg.intraday.symbol) {
