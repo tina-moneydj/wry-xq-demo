@@ -157,8 +157,21 @@ fn main() -> wry::Result<()> {
     let tab_stress = std::env::var_os("XQ_TAB_STRESS").is_some_and(|v| v != "0");
     let group_stress = std::env::var_os("XQ_GROUP_STRESS").is_some_and(|v| v != "0");
     let wheel_perf = std::env::var_os("XQ_WHEEL_PERF").is_some_and(|v| v != "0"); // render() 單幀成本壓測（wheel 縮放熱路徑）
+    // XQ_BENCH=1：第一個 frame／第一筆報價畫出後，網頁送 `BENCH ...` log（bench 腳本打時間戳）
+    let bench = std::env::var_os("XQ_BENCH").is_some_and(|v| v != "0");
+    // 壓測參數：XQ_STRESS_COLS=6 XQ_STRESS_TICK_MS=30000 XQ_STRESS_SCROLL_MS=10000 XQ_STRESS_TICK_HZ=3000
+    let env_num = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    let stress_opts = format!(
+        " window.XQ_STRESS_OPTS = {{cols:{},tickMs:{},scrollMs:{},tickHz:{}}};",
+        env_num("XQ_STRESS_COLS"),
+        env_num("XQ_STRESS_TICK_MS"),
+        env_num("XQ_STRESS_SCROLL_MS"),
+        env_num("XQ_STRESS_TICK_HZ")
+    );
     let init_script = format!(
-        "window.XQ_STATE = {saved_state};{}{}{}{}",
+        "window.XQ_STATE = {saved_state};{}{}{}{}{}{}",
+        stress_opts,
+        if bench { " window.XQ_BENCH = true;" } else { "" },
         if debug { " window.XQ_DEBUG = true;" } else { "" },
         if tab_stress { " window.XQ_TAB_STRESS = true;" } else { "" },
         if group_stress { " window.XQ_GROUP_STRESS = true;" } else { "" },

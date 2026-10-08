@@ -388,6 +388,7 @@
       metrics.paints++;
       metrics.cellUpdates += cellsTouched;
       metrics.lastPaintMs = performance.now() - t0;
+      metrics.paintMsSum = (metrics.paintMsSum || 0) + metrics.lastPaintMs;
       paintScheduled = false;
     }
 
@@ -716,6 +717,8 @@
         paints: metrics.paints,
         cellUpdates: metrics.cellUpdates,
         lastPaintMs: +metrics.lastPaintMs.toFixed(2),
+        avgPaintMs: metrics.paints ? +((metrics.paintMsSum || 0) / metrics.paints).toFixed(3) : 0,
+        avgCellsPerPaint: metrics.paints ? Math.round(metrics.cellUpdates / metrics.paints) : 0,
         scrollEvents: metrics.scrollEvents,
         jankCount: metrics.jankN,
         jankAvgMs: metrics.jankN ? +(metrics.jankMs / metrics.jankN).toFixed(1) : 0,
@@ -725,7 +728,7 @@
     }
 
     function resetMetrics() {
-      metrics = { paints: 0, cellUpdates: 0, lastPaintMs: 0, scrollEvents: 0, jankMs: 0, jankN: 0 };
+      metrics = { paints: 0, cellUpdates: 0, lastPaintMs: 0, paintMsSum: 0, scrollEvents: 0, jankMs: 0, jankN: 0 };
     }
 
     async function bench(opts2) {
@@ -740,6 +743,11 @@
         groupsMeta.push(g);
       } else {
         g.count = opts2.rows || g.count || 50000;
+      }
+      // exactCols：壓測欄數固定為 cols（跨版本比較用，例如 6 欄同 GPUI）
+      if (opts2.exactCols && opts2.cols && opts2.cols < columns.length) {
+        columns = ensureColumns(cloneCols(columns).slice(0, opts2.cols));
+        persistShape();
       }
       // fill columns toward cap
       if ((opts2.cols || 40) > columns.length) {
@@ -815,6 +823,9 @@
         scrollJankCount: afterScroll.jankCount,
         scrollJankAvgMs: afterScroll.jankAvgMs,
         lastPaintMs: afterScroll.lastPaintMs,
+        avgPaintMs: afterScroll.avgPaintMs,
+        avgCellsPerPaint: afterScroll.avgCellsPerPaint,
+        paints: afterScroll.paints,
         cellUpdates: afterScroll.cellUpdates,
         note: "virtualized rows+cols; incremental visible cells; synthetic not persisted",
       });

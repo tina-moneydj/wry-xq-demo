@@ -632,6 +632,11 @@
     }
     if (feedSource() !== "engine") return;
     if (msg.quotes && msg.quotes.length) {
+      if (window.XQ_BENCH && !window.__benchQuote) {
+        // 兩次 rAF：第一筆報價已套用且畫完一幀
+        window.__benchQuote = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => send({ type: "log", msg: "BENCH first-quote" })));
+      }
       const chartSym = chart.getContext && chart.getContext().symbol;
       const dirtyIdx = [];
       const dirtySyms = [];
@@ -1419,12 +1424,15 @@
     }
     activateTab("left", tab.id);
     await new Promise(r => setTimeout(r, 200));
+    // XQ_STRESS_COLS / XQ_STRESS_TICK_MS / XQ_STRESS_SCROLL_MS（main.rs 注入）可改參數；預設 40 欄、各 2 秒
+    const o = window.XQ_STRESS_OPTS || {};
     const result = await groupWl.bench({
       rows: 50000,
-      cols: 40,
-      tickHz: 3000,
-      tickMs: 2000,
-      scrollMs: 2000,
+      cols: o.cols || 40,
+      exactCols: !!o.cols,
+      tickHz: o.tickHz || 3000,
+      tickMs: o.tickMs || 2000,
+      scrollMs: o.scrollMs || 2000,
       report,
     });
     return result;
@@ -1483,10 +1491,17 @@
       last = now;
       el.textContent = fps.toFixed(0);
       el.className = fps >= 50 ? "mem-ok" : fps >= 30 ? "mem-warn" : "mem-high";
+      if (window.XQ_BENCH) send({ type: "log", msg: "BENCH fps " + fps.toFixed(1) });
     }, 1000);
   })();
 
 })();
+</script>
+<script>
+  // XQ_BENCH：前面腳本已建好 UI，兩次 rAF 後即第一幀已畫出
+  if (window.XQ_BENCH) requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(JSON.stringify({ type: "log", msg: "BENCH first-frame" }));
+  }));
 </script>
 </body>
 </html>
