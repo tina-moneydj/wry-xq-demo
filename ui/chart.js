@@ -1785,6 +1785,8 @@
         drawings: drawings().length,
         period,
         symbol: quote.symbol,
+        bars: series().bars.length,
+        cssW, cssH,
       };
     }
     function __perfSetupLight() {
@@ -1887,7 +1889,7 @@
       opts = opts || {};
       ms = ms || 1500;
       const interact = opts.interact || null; // null | "mousemove" | "pan"
-      let frames = 0, ticks = 0;
+      let frames = 0, ticks = 0, renderMs = 0;
       const t0 = performance.now();
       const baseRight = view().right;
       await new Promise(resolve => {
@@ -1905,7 +1907,9 @@
           if (interact === "pan") {
             view().right = baseRight + Math.sin(frames / 6) * 12;
           }
+          const r0 = performance.now();
           render();
+          renderMs += performance.now() - r0;
           frames++;
           if (performance.now() - t0 >= ms) resolve();
           else requestAnimationFrame(tick);
@@ -1919,6 +1923,7 @@
         frames, ticks, elapsedMs: +elapsed.toFixed(1),
         fps: +(frames * 1000 / elapsed).toFixed(1),
         tickHz: +(ticks * 1000 / elapsed).toFixed(1),
+        avgRenderMs: frames ? +(renderMs / frames).toFixed(3) : 0,
         interact, count: drawings().length,
         overlays: entry && entry.overlays ? entry.overlays.length : 0,
       };

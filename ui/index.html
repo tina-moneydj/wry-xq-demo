@@ -1405,6 +1405,44 @@
     }, 1000);
   }
 
+  // 重圖表壓測（XQ_CHART_STRESS=1，與 GPUI 版同流程）：等第一筆報價 → 300ms 後 20 疊加＋全部副圖＋1000 畫線
+  // → 暖身 → 只跳價／跳價＋十字線／跳價＋平移 各 phaseMs。結果 CHARTPERF|{json}、階段 CHARTPHASE|名稱|start/end。
+  if (window.XQ_CHART_STRESS) {
+    (async () => {
+      const report = (obj) => send({ type: "log", msg: "CHARTPERF|" + JSON.stringify(obj) });
+      const phase = (name, ev) => send({ type: "log", msg: "CHARTPHASE|" + name + "|" + ev });
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const raf2 = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const o = window.XQ_CHART_OPTS || {};
+      const t0 = performance.now();
+      while (!window.__benchQuote && performance.now() - t0 < (o.waitMs || 15000)) await sleep(20);
+      if (!window.__benchQuote) report({ phase: "warn", msg: "no quote, continuing" });
+      await sleep(300);
+      // 上方走勢圖放大（1200×720 預設 0.55 時 20 疊加的圖例會吃掉整個主圖）；GPUI 版用 XQ_TOP_FRAC 調成同尺寸
+      if (o.topRatio) { topRatio = o.topRatio; applyLayout(); }
+      let info = null;
+      for (let k = 0; k < 100 && !info; k++) {
+        try { info = chart.__perf.setupStress({ drawings: o.drawings != null ? o.drawings : 1000 }); }
+        catch (e) { await sleep(50); }
+      }
+      if (!info) { report({ phase: "error", msg: "chart not ready" }); return; }
+      await raf2();
+      send({ type: "log", msg: "BENCH heavy-frame" });
+      report({ phase: "setup", sinceStartMs: Math.round(performance.now() - t0), ...info });
+      phase("warm", "start");
+      await chart.__perf.continuous(o.warmMs || 3000, { interact: null });
+      for (const [name, interact] of [["ticks", null], ["crosshair", "mousemove"], ["pan", "pan"]]) {
+        phase(name, "start");
+        const r = await chart.__perf.continuous(o.phaseMs || 10000, { interact });
+        report({ phase: name, seconds: +(r.elapsedMs / 1000).toFixed(2), frames: r.frames, fps: r.fps, avgPaintMs: r.avgRenderMs, tickHz: r.tickHz });
+        phase(name, "end");
+      }
+      report({ phase: "done", sinceStartMs: Math.round(performance.now() - t0) });
+      // 結束後持續跳價，讓量測腳本收尾時負載一致
+      for (;;) await chart.__perf.continuous(60000, { interact: null });
+    })().catch(err => send({ type: "log", msg: "CHARTPERF|ERROR|" + String(err && err.stack || err) }));
+  }
+
 
   window.__benchGroupWatchlist = async function () {
     const report = (obj) => {
