@@ -682,6 +682,65 @@
       return n;
     }
 
+    // engine id（Rust push.rs 的代號 id）→ 本表列號快取；-2 = 還沒查、-1 = 不在本表。換表（data 變了）就整個重設。
+    let rowById = new Int32Array(256).fill(-2);
+    let rowByIdData = null;
+    /** 精簡格式的 engine 報價（平行數字陣列，價格單位分）：O(1) 對列、不建物件；可見列排進 dirty。 */
+    function applyEngineCols(symOf, nameOf, m) {
+      const ids = m.i;
+      if (!data || !ids || !ids.length) return 0;
+      if (!data.tickbench && (data.synthetic || data.count > 8000)) return 0;
+      if (symIndex.size !== data.count) rebuildSymIndex();
+      if (rowByIdData !== data) { rowByIdData = data; rowById.fill(-2); }
+      const p = m.p, c = m.c, v = m.v;
+      let n = 0;
+      for (let k = 0; k < ids.length; k++) {
+        const id = ids[k];
+        if (id >= rowById.length) {
+          const next = new Int32Array(Math.max(id + 1, rowById.length * 2)).fill(-2);
+          next.set(rowById);
+          rowById = next;
+        }
+        let i = rowById[id];
+        if (i === -2) {
+          const sym = symOf[id];
+          const r = sym === undefined ? undefined : symIndex.get(sym);
+          i = r === undefined ? -1 : r;
+          rowById[id] = i;
+          if (i >= 0 && nameOf[id]) data.names[i] = nameOf[id];
+        }
+        if (i < 0) continue;
+        const px = p[k] / 100;
+        const ch = c[k] / 100;
+        data.price[i] = px;
+        data.change[i] = ch;
+        data.prev[i] = px - ch;
+        if (px > data.high[i]) data.high[i] = px;
+        if (px < data.low[i] || data.low[i] === 0) data.low[i] = px;
+        data.volume[i] = v[k];
+        data.turnover[i] = v[k] * px;
+        dirtyRows.add(i);
+        n++;
+      }
+      // 合併掉的中間極值（稀疏 [k, hi, lo, …]）
+      const x = m.x;
+      if (x) {
+        for (let j = 0; j < x.length; j += 3) {
+          const i = rowById[ids[x[j]]];
+          if (i < 0) continue;
+          const hi = x[j + 1] / 100, lo = x[j + 2] / 100;
+          if (hi > data.high[i]) data.high[i] = hi;
+          if (lo < data.low[i] || data.low[i] === 0) data.low[i] = lo;
+        }
+      }
+      if (n) schedulePaint(false);
+      return n;
+    }
+    /** 名稱變了的 engine id（[id, name, …]）：下次重新對列並更新名稱 */
+    function engineRenamed(r) {
+      for (let j = 0; j < r.length; j += 2) if (r[j] < rowById.length) rowById[r[j]] = -2;
+    }
+
     /** 高頻 tick：只改資料陣列，可見列排進 dirty → rAF 增量上色 */
     function applyTicks(n) {
       n = Math.max(1, n | 0);
@@ -865,6 +924,8 @@
       }),
       reload: () => schedulePaint(true),
       applyEngineQuotes,
+      applyEngineCols,
+      engineRenamed,
       loadTransient,
       applyTicks,
       startTicks,

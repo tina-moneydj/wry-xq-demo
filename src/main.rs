@@ -6,11 +6,11 @@
 // 網頁 JS 會把右下格的位置用 window.ipc.postMessage 傳回來，Rust 再呼叫 set_bounds。
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod engine;
+mod push;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -46,6 +46,11 @@ enum IpcMessage {
     Save { data: serde_json::Value },
     /// 要向 XQNext 訂閱的代號。chart 是目前走勢圖，period 為 T 時才要分時。
     Feed { symbols: Vec<String>, chart: String, period: String },
+    /// 網頁已套用上一批行情（在下一個 rAF 送）；resync = 網頁的代號 id 表不完整，要重送定義。
+    Ready {
+        #[serde(default)]
+        resync: bool,
+    },
 }
 
 /// 從 webview 回呼送到主執行緒事件迴圈的事件。
@@ -56,72 +61,10 @@ enum UserEvent {
     ChildLoaded(String),
     /// 約每秒一次的程序記憶體取樣（含 WebView 子行程），給狀態列用。
     MemStats { rss_mb: f64, rss_max_mb: f64, cpu_pct: f64 },
-    /// XQNext 合併後的一包行情，交給網頁一次畫完。
-    EnginePush(Value),
+    /// XQNext 的一包行情（背景執行緒已解碼成型別，主執行緒合併後節流推給網頁）。
+    EnginePush(engine::Feed),
 }
 
-
-/// 合併同一幀內多包 Engine 推送：報價／分鐘線各代號只留最新，分時整包覆蓋，減少 evaluate_script。
-/// `quote_pos` 是 dst.quotes 裡「代號 → 位置」的索引（每次 flush 清空），合併是 O(1)／筆；
-/// 原本每筆線性搜尋，同一批代號很多時（5 萬檔快照、高頻大量代號）會變 O(n²) 卡死主執行緒。
-fn coalesce_engine_push(dst: &mut Option<Value>, quote_pos: &mut HashMap<String, usize>, src: Value) {
-    let Value::Object(mut obj) = src else {
-        *dst = Some(src);
-        return;
-    };
-    let entry = dst.get_or_insert_with(|| serde_json::json!({}));
-    let map = entry.as_object_mut().unwrap();
-    if let Some(Value::Array(quotes)) = obj.remove("quotes") {
-        let slot = map
-            .entry("quotes".to_string())
-            .or_insert_with(|| serde_json::json!([]));
-        let arr = slot.as_array_mut().unwrap();
-        for q in quotes {
-            let sym = q.get("symbol").and_then(|s| s.as_str()).unwrap_or("");
-            match quote_pos.get(sym) {
-                Some(&pos) => arr[pos] = q,
-                None => {
-                    quote_pos.insert(sym.to_string(), arr.len());
-                    arr.push(q);
-                }
-            }
-        }
-    }
-    // XQ_TICK_BENCH：保留這批最早／最新的時間戳，raw 筆數累加、合併包數 nev
-    if let Some(st) = obj.remove("stamp") {
-        if !map.contains_key("stamp0") {
-            map.insert("stamp0".to_string(), st.clone());
-        }
-        map.insert("stamp".to_string(), st);
-    }
-    if let Some(raw) = obj.get("raw").and_then(|v| v.as_u64()) {
-        let prev = map.get("raw").and_then(|v| v.as_u64()).unwrap_or(0);
-        map.insert("raw".to_string(), serde_json::json!(prev + raw));
-        let nev = map.get("nev").and_then(|v| v.as_u64()).unwrap_or(0);
-        map.insert("nev".to_string(), serde_json::json!(nev + 1));
-    }
-    if let Some(intra) = obj.remove("intraday") {
-        map.insert("intraday".to_string(), intra);
-    }
-    if let Some(Value::Array(mins)) = obj.remove("minutes") {
-        // 分鐘線只有走勢圖那一檔，量很小，線性即可
-        let slot = map
-            .entry("minutes".to_string())
-            .or_insert_with(|| serde_json::json!([]));
-        let arr = slot.as_array_mut().unwrap();
-        for m in mins {
-            let sym = m.get("symbol").and_then(|s| s.as_str()).unwrap_or("");
-            if let Some(pos) = arr
-                .iter()
-                .position(|x| x.get("symbol").and_then(|s| s.as_str()) == Some(sym))
-            {
-                arr[pos] = m;
-            } else {
-                arr.push(m);
-            }
-        }
-    }
-}
 
 fn main() -> wry::Result<()> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -274,12 +217,18 @@ fn main() -> wry::Result<()> {
         }
     });
 
-    let mut engine_coalesced: Option<Value> = None;
-    let mut engine_quote_pos: HashMap<String, usize> = HashMap::new();
+    // 行情推送：合併＋in-flight 1 批（網頁 rAF 回 ready 才送下一批），見 push.rs
+    let mut engine_batch = push::PushBatch::default();
+    let mut engine_inflight: Option<Instant> = None;
+    const ENGINE_ACK_TIMEOUT: Duration = Duration::from_millis(250);
     let tick_bench = engine::tick_bench_enabled();
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        // 有一批在網頁裡、又有新資料等著：最多等 ENGINE_ACK_TIMEOUT 就照送（防頁面沒回 ready 卡住）
+        *control_flow = match engine_inflight {
+            Some(t) if engine_batch.has_data() => ControlFlow::WaitUntil(t + ENGINE_ACK_TIMEOUT),
+            _ => ControlFlow::Wait,
+        };
 
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
@@ -318,33 +267,41 @@ fn main() -> wry::Result<()> {
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Feed { symbols, chart, period })) => {
                 let _ = feed_tx.send(engine::FeedCmd { symbols, chart, period });
             }
-            Event::UserEvent(UserEvent::EnginePush(value)) => {
-                // hello/down：立刻送；行情：合併到 MainEventsCleared 再一次 evaluate
-                if value.get("down").is_some() {
-                    engine_coalesced = None; // 斷線後丟棄未刷行情，避免殘包晚到
-                    engine_quote_pos.clear();
+            Event::UserEvent(UserEvent::EnginePush(feed)) => match feed {
+                // hello/down：立刻送；行情：合併，MainEventsCleared 時視 in-flight 狀態送出
+                engine::Feed::Down => {
+                    engine_batch.clear(); // 斷線後丟棄未刷行情，避免殘包晚到
+                    engine_inflight = None;
+                    let _ = main_view.evaluate_script("window.__enginePush&&window.__enginePush({down:true})");
+                }
+                engine::Feed::Hello(ready) => {
                     let _ = main_view.evaluate_script(&format!(
-                        "window.__enginePush&&window.__enginePush({value})"
+                        "window.__enginePush&&window.__enginePush({{hello:{{ready:{ready}}}}})"
                     ));
-                } else if value.get("hello").is_some() {
-                    let _ = main_view.evaluate_script(&format!(
-                        "window.__enginePush&&window.__enginePush({value})"
-                    ));
-                } else {
-                    coalesce_engine_push(&mut engine_coalesced, &mut engine_quote_pos, value);
+                }
+                engine::Feed::Quotes { quotes, stamp } => engine_batch.add_quotes(quotes, stamp),
+                engine::Feed::Intraday(v) => engine_batch.add_intraday(v),
+                engine::Feed::Minutes(bars) => engine_batch.add_minutes(bars),
+            },
+            Event::UserEvent(UserEvent::Ipc(IpcMessage::Ready { resync })) => {
+                engine_inflight = None;
+                if resync {
+                    engine_batch.resync();
                 }
             }
             Event::MainEventsCleared => {
-                if let Some(mut value) = engine_coalesced.take() {
-                    engine_quote_pos.clear();
-                    if tick_bench {
-                        if let Some(obj) = value.as_object_mut() {
-                            obj.insert("evalUs".into(), serde_json::json!(engine::unix_us()));
-                        }
+                let due = engine_inflight.map_or(true, |t| t.elapsed() >= ENGINE_ACK_TIMEOUT);
+                if due && engine_batch.has_data() {
+                    let ev = tick_bench.then(engine::unix_us);
+                    let (quotes, other) = engine_batch.take_scripts(ev);
+                    if let Some(js) = other {
+                        let _ = main_view.evaluate_script(&js);
                     }
-                    let _ = main_view.evaluate_script(&format!(
-                        "window.__enginePush&&window.__enginePush({value})"
-                    ));
+                    if let Some(js) = quotes {
+                        let _ = main_view.evaluate_script(js);
+                        // 只有報價批會回 ready（分時／分鐘線很少，不佔 in-flight）
+                        engine_inflight = Some(Instant::now());
+                    }
                 }
             }
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Home)) => {

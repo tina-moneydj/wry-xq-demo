@@ -393,22 +393,23 @@
     ? { raw: 0, rows: 0, applied: 0, pushes: 0, pushMs: 0, nev: 0, frames: 0, lat: [], sw: [], agg: null }
     : null;
   const nowUs = () => Math.round((performance.timeOrigin + performance.now()) * 1000);
-  function tbOnPush(msg, n, ms) {
-    TB.raw += msg.raw || 0;
-    TB.rows += msg.quotes.length;
+  // raw = 未合併筆數、rows = 本批（合併後）筆數、st0/st = 本批最早／最新時間戳、ev = Rust evaluate 時間
+  function tbOnPush(raw, rows, nev, st0, st, ev, n, ms) {
+    TB.raw += raw || 0;
+    TB.rows += rows;
     TB.applied += n;
     TB.pushes++;
     TB.pushMs += ms;
-    TB.nev += msg.nev || 0;
-    if (!msg.stamp) return;
+    TB.nev += nev || 0;
+    if (!st) return;
     const applied = nowUs();
     if (TB.agg) {
-      TB.agg.last = msg.stamp;
+      TB.agg.last = st;
       TB.agg.applied = applied;
-      TB.agg.evalUs = msg.evalUs || 0;
+      TB.agg.evalUs = ev || 0;
       return;
     }
-    TB.agg = { first: msg.stamp0 || msg.stamp, last: msg.stamp, applied, evalUs: msg.evalUs || 0 };
+    TB.agg = { first: st0 || st, last: st, applied, evalUs: ev || 0 };
     // 第一個 rAF：這一幀開始（本幀之前套用的都會畫進這幀）；第二個 rAF：這幀已畫完
     requestAnimationFrame(() => {
       const a = TB.agg;
@@ -659,23 +660,101 @@
     if (src) applyFeedSource(src, true);
   });
   function upsertQuote(q) {
-    let i = quoteIndex.get(q.symbol);
+    return upsertQuoteFields(q.symbol, q.name, q.price, q.change, q.volume);
+  }
+  function upsertQuoteFields(symbol, name, price, change, volume) {
+    let i = quoteIndex.get(symbol);
     let row;
-    if (i == null) {
-      row = { symbol: q.symbol, name: q.name || q.symbol, price: q.price, change: q.change };
+    if (i === undefined) {
+      row = { symbol, name: name || symbol, price, change, volume, _seq: 0 };
       i = QUOTES.length;
       QUOTES.push(row);
-      quoteIndex.set(q.symbol, i);
+      quoteIndex.set(symbol, i);
       quoteDomBuilt = false; // 結構變了，下次全量建表
     } else {
       row = QUOTES[i];
     }
-    if (q.name) row.name = q.name;
-    row.price = q.price;
-    row.change = q.change;
-    row.volume = q.volume;
+    if (name) row.name = name;
+    row.price = price;
+    row.change = change;
+    row.volume = volume;
     return i;
   }
+
+  // ---- 精簡行情推送（src/push.rs）：Rust 每個顯示幀最多推一批，同代號已合併 ----
+  // m = { d:[id,sym,name,…] 新代號, r:[id,name,…] 改名, i:[id…], p/c:[分…], v:[量…], x:[k,hi,lo,…] 本批極值,
+  //       st0/st/ev/raw/nev：XQ_TICK_BENCH 量測 }。套用後在下一個 rAF 回 ready，Rust 才送下一批。
+  const ENG_SYM = [];
+  const ENG_NAME = [];
+  const engDirtyIdx = [];
+  const engTick = { symbol: "", price: 0, change: 0, volume: NaN, high: NaN, low: NaN };
+  let engPushSeq = 0;
+  let engAckRaf = 0;
+  let engResync = false;
+  function engAck() {
+    if (engAckRaf) return;
+    engAckRaf = requestAnimationFrame(() => {
+      engAckRaf = 0;
+      const msg = engResync ? '{"type":"ready","resync":true}' : '{"type":"ready"}';
+      engResync = false;
+      if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(msg);
+    });
+  }
+  window.__enginePushC = function (m) {
+    engAck();
+    const d = m.d;
+    if (d) for (let j = 0; j < d.length; j += 3) { ENG_SYM[d[j]] = d[j + 1]; ENG_NAME[d[j]] = d[j + 2]; }
+    const r = m.r;
+    if (r) {
+      for (let j = 0; j < r.length; j += 2) ENG_NAME[r[j]] = r[j + 1];
+      if (groupWl && groupWl.engineRenamed) groupWl.engineRenamed(r);
+    }
+    if (feedSource() !== "engine") return;
+    const ids = m.i, p = m.p, c = m.c, v = m.v;
+    const n = ids.length;
+    if (!n) return;
+    if (window.XQ_BENCH && !window.__benchQuote) {
+      window.__benchQuote = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => send({ type: "log", msg: "BENCH first-quote" })));
+    }
+    const tbT0 = TB ? performance.now() : 0;
+    const chartSym = chart.getContext && chart.getContext().symbol;
+    let chartK = -1, chartSeen = false;
+    const seq = ++engPushSeq;
+    engDirtyIdx.length = 0;
+    for (let k = 0; k < n; k++) {
+      const sym = ENG_SYM[ids[k]];
+      if (sym === undefined) { engResync = true; continue; }
+      // 壓測合成列（Z…）只進組合表，不進左側報價清單（正式 feed 只會送有訂閱的代號）
+      if (TB && sym.charCodeAt(0) === 90) continue;
+      const i = upsertQuoteFields(sym, ENG_NAME[ids[k]], p[k] / 100, c[k] / 100, v[k]);
+      QUOTES[i]._seq = seq;
+      engDirtyIdx.push(i);
+      const first = chart.anchorLive(sym);
+      if (sym === chartSym) { chartSeen = true; if (!first) chartK = k; }
+    }
+    if (chartK >= 0) {
+      engTick.symbol = chartSym;
+      engTick.price = p[chartK] / 100;
+      engTick.change = c[chartK] / 100;
+      // 分時的量是該分鐘成交量，不能把全日總量寫進最後一根。
+      engTick.volume = chart.getContext().period !== "T" ? v[chartK] : NaN;
+      engTick.high = NaN;
+      engTick.low = NaN;
+      const x = m.x;
+      if (x) for (let j = 0; j < x.length; j += 3) {
+        if (x[j] === chartK) { engTick.high = x[j + 1] / 100; engTick.low = x[j + 2] / 100; break; }
+      }
+      chart.updateQuote(engTick);
+    }
+    const nGroup = groupWl && groupWl.applyEngineCols ? groupWl.applyEngineCols(ENG_SYM, ENG_NAME, m) : 0;
+    markQuotesDirty(engDirtyIdx);
+    markWatchDirtyBySeq(seq);
+    if (chartSeen) refreshChartTitle();
+    const el = document.getElementById("engine-state");
+    if (el && el.textContent !== "行情連線") el.textContent = "行情連線";
+    if (TB) tbOnPush(m.raw, n, m.nev, m.st0, m.st, m.ev, nGroup, performance.now() - tbT0);
+  };
   window.__enginePush = function (msg) {
     const el = document.getElementById("engine-state");
     if (!msg) return;
@@ -716,7 +795,7 @@
       markQuotesDirty(dirtyIdx);
       markWatchDirtyForSymbols(dirtySyms);
       refreshChartTitle();
-      if (TB) tbOnPush(msg, nGroup, performance.now() - tbT0);
+      if (TB) tbOnPush(msg.raw, msg.quotes.length, msg.nev, msg.stamp0, msg.stamp, msg.evalUs, nGroup, performance.now() - tbT0);
       if (el && el.textContent !== "行情連線") el.textContent = "行情連線";
     }
     if (msg.intraday && msg.intraday.symbol) {
@@ -791,6 +870,15 @@
       });
       watchDirty.clear();
     });
+  }
+  /** 這一批（seq）更新過的報價列 → 自選列 dirty；只掃自選清單，不配置 Set */
+  function markWatchDirtyBySeq(seq) {
+    const wl = store.watchlist;
+    for (let w = 0; w < wl.length; w++) {
+      const i = quoteIndex.get(wl[w]);
+      if (i !== undefined && QUOTES[i]._seq === seq) watchDirty.add(w);
+    }
+    if (watchDirty.size) scheduleWatchPaint();
   }
   function markWatchDirtyForSymbols(syms) {
     if (!syms || !syms.length) return;

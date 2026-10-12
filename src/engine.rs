@@ -19,7 +19,41 @@ pub struct FeedCmd {
     pub period: String,
 }
 
-pub fn spawn<T: Send + 'static>(proxy: EventLoopProxy<T>, rx: Receiver<FeedCmd>, mut to_event: impl FnMut(Value) -> T + Send + 'static) {
+/// 一筆報價（價格單位：分，避免浮點；JS 端 /100）。
+#[derive(Debug)]
+pub struct Quote {
+    pub symbol: String,
+    pub name: String,
+    pub price: i32,
+    pub change: i32,
+    pub volume: i64,
+}
+
+/// 一根分鐘線（分時）。價格單位：分；v = 該分鐘累計量。
+#[derive(Debug, Clone)]
+pub struct MinuteBar {
+    pub symbol: String,
+    pub t: u16,
+    pub o: i32,
+    pub h: i32,
+    pub l: i32,
+    pub c: i32,
+    pub v: i64,
+}
+
+/// 背景執行緒解碼後交給主執行緒的行情（不再每筆建 serde_json 物件）。
+#[derive(Debug)]
+pub enum Feed {
+    Down,
+    Hello(bool),
+    /// stamp = XQ_TICK_BENCH 時的 [seq, sent_us, recv_us]
+    Quotes { quotes: Vec<Quote>, stamp: Option<[u64; 3]> },
+    /// 分時快照（少見、整包覆蓋），保持 JSON 給網頁既有的 __enginePush
+    Intraday(Value),
+    Minutes(Vec<MinuteBar>),
+}
+
+pub fn spawn<T: Send + 'static>(proxy: EventLoopProxy<T>, rx: Receiver<FeedCmd>, mut to_event: impl FnMut(Feed) -> T + Send + 'static) {
     thread::spawn(move || {
         // XQ_FEED_ADDR=host:port 可覆寫（壓測／開發用，同 GPUI 版）；預設 127.0.0.1:47631
         let addr: SocketAddr = std::env::var("XQ_FEED_ADDR")
@@ -34,7 +68,7 @@ pub fn spawn<T: Send + 'static>(proxy: EventLoopProxy<T>, rx: Receiver<FeedCmd>,
                     if let Err(error) = session(stream, &rx, &mut latest, &proxy, &mut to_event) {
                         eprintln!("[engine] 連線中斷: {error}");
                     }
-                    let _ = proxy.send_event(to_event(json!({ "down": true })));
+                    let _ = proxy.send_event(to_event(Feed::Down));
                 }
                 Err(_) => {
                     while let Ok(cmd) = rx.try_recv() {
@@ -52,7 +86,7 @@ fn session<T>(
     rx: &Receiver<FeedCmd>,
     latest: &mut Option<FeedCmd>,
     proxy: &EventLoopProxy<T>,
-    to_event: &mut impl FnMut(Value) -> T,
+    to_event: &mut impl FnMut(Feed) -> T,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(200)))?;
     stream.set_nodelay(true)?;
@@ -75,11 +109,13 @@ fn session<T>(
         }
         match read_frame(&mut stream, &mut pending) {
             Ok(payload) => {
-                if let Some(mut value) = decode(&payload) {
+                if let Some(mut feed) = decode(&payload) {
                     if bench {
-                        annotate_stamp(&payload, &mut value);
+                        if let Feed::Quotes { stamp, .. } = &mut feed {
+                            *stamp = stamp_of(&payload);
+                        }
                     }
-                    let _ = proxy.send_event(to_event(value));
+                    let _ = proxy.send_event(to_event(feed));
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut || error.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -99,18 +135,15 @@ pub fn unix_us() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0)
 }
 
-/// 在解碼結果加上 `stamp: [seq, sent_us, recv_us]` 與 `raw: 筆數`（未合併）。
-fn annotate_stamp(payload: &[u8], value: &mut Value) {
-    let Some(obj) = value.as_object_mut() else { return };
-    let Some(n) = obj.get("quotes").and_then(|q| q.as_array()).map(|a| a.len()) else { return };
-    obj.insert("raw".into(), json!(n));
-    if payload.len() < 23 || payload[payload.len() - 20..payload.len() - 16] != *b"XQTS" {
-        return;
+/// 報價包尾端的壓測時間戳 → `[seq, sent_us, recv_us]`。
+fn stamp_of(payload: &[u8]) -> Option<[u64; 3]> {
+    if payload.first() != Some(&2) || payload.len() < 23 || payload[payload.len() - 20..payload.len() - 16] != *b"XQTS" {
+        return None;
     }
     let t = &payload[payload.len() - 16..];
-    let seq = u64::from_le_bytes(t[..8].try_into().unwrap());
-    let sent = u64::from_le_bytes(t[8..].try_into().unwrap());
-    obj.insert("stamp".into(), json!([seq, sent, unix_us()]));
+    let seq = u64::from_le_bytes(t[..8].try_into().ok()?);
+    let sent = u64::from_le_bytes(t[8..].try_into().ok()?);
+    Some([seq, sent, unix_us()])
 }
 
 fn write_subscribe(stream: &mut TcpStream, cmd: &FeedCmd) -> std::io::Result<()> {
@@ -168,9 +201,9 @@ fn take_frame(pending: &mut Vec<u8>) -> std::io::Result<Option<Vec<u8>>> {
     Ok(Some(payload))
 }
 
-fn decode(payload: &[u8]) -> Option<Value> {
+fn decode(payload: &[u8]) -> Option<Feed> {
     match *payload.first()? {
-        1 => Some(json!({ "hello": { "ready": payload.get(1).copied().unwrap_or(0) == 1 } })),
+        1 => Some(Feed::Hello(payload.get(1).copied().unwrap_or(0) == 1)),
         2 => decode_quotes(payload),
         3 => decode_intraday(payload),
         4 => decode_minutes(payload),
@@ -216,19 +249,14 @@ fn px(v: i32) -> f64 {
     v as f64 / 100.0
 }
 
-fn decode_quotes(payload: &[u8]) -> Option<Value> {
+fn decode_quotes(payload: &[u8]) -> Option<Feed> {
     let mut c = Cursor { buf: payload, i: 1 };
     let n = c.u16()? as usize;
     let mut quotes = Vec::with_capacity(n);
     for _ in 0..n {
-        let symbol = c.text()?;
-        let name = c.text()?;
-        let price = px(c.i32()?);
-        let change = px(c.i32()?);
-        let volume = c.i64()?;
-        quotes.push(json!({ "symbol": symbol, "name": name, "price": price, "change": change, "volume": volume }));
+        quotes.push(Quote { symbol: c.text()?, name: c.text()?, price: c.i32()?, change: c.i32()?, volume: c.i64()? });
     }
-    Some(json!({ "quotes": quotes }))
+    Some(Feed::Quotes { quotes, stamp: None })
 }
 
 fn take_bar(c: &mut Cursor<'_>) -> Option<Value> {
@@ -241,7 +269,7 @@ fn take_bar(c: &mut Cursor<'_>) -> Option<Value> {
     Some(json!([t, o, h, l, close, v]))
 }
 
-fn decode_intraday(payload: &[u8]) -> Option<Value> {
+fn decode_intraday(payload: &[u8]) -> Option<Feed> {
     let mut c = Cursor { buf: payload, i: 1 };
     let symbol = c.text()?;
     let prev = px(c.i32()?);
@@ -250,17 +278,16 @@ fn decode_intraday(payload: &[u8]) -> Option<Value> {
     for _ in 0..n {
         bars.push(take_bar(&mut c)?);
     }
-    Some(json!({ "intraday": { "symbol": symbol, "prev": prev, "bars": bars } }))
+    Some(Feed::Intraday(json!({ "symbol": symbol, "prev": prev, "bars": bars })))
 }
 
-fn decode_minutes(payload: &[u8]) -> Option<Value> {
+fn decode_minutes(payload: &[u8]) -> Option<Feed> {
     let mut c = Cursor { buf: payload, i: 1 };
     let symbol = c.text()?;
     let n = c.u16()? as usize;
-    let mut minutes = Vec::with_capacity(n);
+    let mut bars = Vec::with_capacity(n);
     for _ in 0..n {
-        let bar = take_bar(&mut c)?;
-        minutes.push(json!({ "symbol": symbol, "bar": bar }));
+        bars.push(MinuteBar { symbol: symbol.clone(), t: c.u16()?, o: c.i32()?, h: c.i32()?, l: c.i32()?, c: c.i32()?, v: c.i64()? });
     }
-    Some(json!({ "minutes": minutes }))
+    Some(Feed::Minutes(bars))
 }
