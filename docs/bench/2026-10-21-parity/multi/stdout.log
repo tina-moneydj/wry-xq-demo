@@ -1,0 +1,184 @@
+[00:16:54] gpui 1w #1 sent=299952 loss=0 lat p50/p99=103.4/113.2ms cpu=502.3(19.0) rss/pss=234.6/197.5 w0:21fps/103.4/113.2ms
+[00:17:36] wry  1w #1 sent=299992 loss=0 lat p50/p99=48.7/63.5ms cpu=332.8(96.1) rss/pss=798.9/554.7 w0:53.0fps/48.7/63.5ms
+[00:18:18] egui 1w #1 sent=299975 loss=0 lat p50/p99=30.2/34.8ms cpu=304.4(14.6) rss/pss=147.6/105.7 w0:61.0fps/30.2/34.8ms
+[00:19:00] gpui 1w #2 sent=299996 loss=0 lat p50/p99=104.5/111.9ms cpu=484.9(18.1) rss/pss=234.0/196.9 w0:21fps/104.5/111.9ms
+[00:19:42] wry  1w #2 sent=299962 loss=0 lat p50/p99=45.9/57.0ms cpu=332.7(92.0) rss/pss=781.0/536.6 w0:60.0fps/45.9/57.0ms
+[00:20:24] egui 1w #2 sent=299993 loss=0 lat p50/p99=30.0/34.2ms cpu=284.7(13.5) rss/pss=146.8/104.9 w0:61.0fps/30.0/34.2ms
+[00:21:06] gpui 1w #3 sent=299989 loss=0 lat p50/p99=106.6/111.6ms cpu=447.7(16.9) rss/pss=234.4/197.3 w0:21fps/106.6/111.6ms
+[00:21:48] wry  1w #3 sent=299991 loss=0 lat p50/p99=44.6/55.6ms cpu=325.8(91.8) rss/pss=813.8/569.6 w0:61.0fps/44.6/55.6ms
+[00:22:30] egui 1w #3 sent=299956 loss=0 lat p50/p99=29.4/35.5ms cpu=274.1(12.5) rss/pss=146.5/104.6 w0:61.0fps/29.4/35.5ms
+[00:23:12] gpui 4w #1 sent=299961 loss=0 lat p50/p99=313.2/428.2ms cpu=616.1(21.1) rss/pss=477.4/440.3 w0:8fps/301.3/386.5ms w1:8fps/296.1/420.5ms w2:8fps/294.9/399.0ms w3:8fps/388.1/435.0ms
+[00:23:54] wry  4w #1 sent=299967 loss=0 lat p50/p99=85.8/127.3ms cpu=615.4(188.9) rss/pss=2577.1/1548.3 w0:29.0fps/87.8/127.3ms w1:30.0fps/86.4/126.7ms w2:30.0fps/83.7/127.3ms w3:30.0fps/85.0/126.3ms
+[00:24:36] egui 4w #1 sent=299934 loss=0 lat p50/p99=46.6/78.8ms cpu=504.2(18.6) rss/pss=188.8/135.0 w0:28fps/68.6/89.6ms w1:28fps/34.0/44.5ms w2:28fps/42.7/55.8ms w3:28fps/51.4/70.6ms
+[00:25:18] gpui 4w #2 sent=299961 loss=0 lat p50/p99=313.8/436.2ms cpu=607.4(20.6) rss/pss=477.2/440.1 w0:8.0fps/298.5/396.5ms w1:8.0fps/292.3/392.5ms w2:8.0fps/290.6/397.0ms w3:8.0fps/389.4/451.9ms
+[00:26:00] wry  4w #2 sent=299978 loss=0 lat p50/p99=93.7/144.7ms cpu=575.3(179.1) rss/pss=2568.5/1540.1 w0:27.5fps/96.2/144.3ms w1:29.0fps/93.0/146.1ms w2:28.0fps/93.2/140.8ms w3:29.0fps/92.9/140.7ms
+[00:26:42] egui 4w #2 sent=299997 loss=0 lat p50/p99=46.1/78.3ms cpu=518.0(18.4) rss/pss=189.4/135.6 w0:29fps/67.9/85.3ms w1:29fps/33.5/43.6ms w2:29fps/42.3/53.9ms w3:29fps/51.0/64.0ms
+[00:27:24] gpui 4w #3 sent=299951 loss=0 lat p50/p99=307.7/424.1ms cpu=612.8(20.6) rss/pss=477.7/440.5 w0:8fps/296.3/405.0ms w1:8fps/287.3/383.8ms w2:8fps/283.6/397.7ms w3:8fps/379.5/428.8ms
+[00:28:06] wry  4w #3 sent=299990 loss=0 lat p50/p99=91.5/154.6ms cpu=577.7(177.8) rss/pss=2554.3/1528.2 w0:28.0fps/93.5/160.3ms w1:29.0fps/90.1/142.2ms w2:29.0fps/91.5/151.3ms w3:29.0fps/90.9/158.6ms
+[00:28:48] egui 4w #3 sent=299966 loss=0 lat p50/p99=46.0/77.8ms cpu=507.3(18.4) rss/pss=189.4/135.5 w0:29fps/67.3/81.9ms w1:29fps/33.1/41.9ms w2:29fps/41.7/51.6ms w3:29fps/50.5/62.0ms
+{
+ "gpui/1w": {
+  "runs": 3,
+  "sent": 299989,
+  "loss": 0,
+  "lat_p50": 104.5,
+  "lat_p99": 111.9,
+  "lat_max": 138.2,
+  "worst_window_p99": 111.9,
+  "fps_per_window": [
+   21
+  ],
+  "fps_min_window": 21,
+  "fps_mean": 21.0,
+  "cpu": 484.9,
+  "cpuExLlvmpipe": 18.1,
+  "rssEnd": 234.4,
+  "pssEnd": 197.3,
+  "rssPeak": 234.4,
+  "pssPeak": 197.3,
+  "rssStart": 234.1,
+  "pssStart": 197.0,
+  "procs": [
+   "gpui-xq-demo"
+  ]
+ },
+ "gpui/4w": {
+  "runs": 3,
+  "sent": 299961,
+  "loss": 0,
+  "lat_p50": 313.2,
+  "lat_p99": 428.2,
+  "lat_max": 469.6,
+  "worst_window_p99": 435.0,
+  "fps_per_window": [
+   8.0,
+   8.0,
+   8.0,
+   8.0
+  ],
+  "fps_min_window": 8.0,
+  "fps_mean": 8.0,
+  "cpu": 612.8,
+  "cpuExLlvmpipe": 20.6,
+  "rssEnd": 477.4,
+  "pssEnd": 440.3,
+  "rssPeak": 477.5,
+  "pssPeak": 440.3,
+  "rssStart": 477.4,
+  "pssStart": 440.3,
+  "procs": [
+   "gpui-xq-demo"
+  ]
+ },
+ "wry/1w": {
+  "runs": 3,
+  "sent": 299991,
+  "loss": 0,
+  "lat_p50": 45.9,
+  "lat_p99": 57.0,
+  "lat_max": 74.5,
+  "worst_window_p99": 57.0,
+  "fps_per_window": [
+   60.0
+  ],
+  "fps_min_window": 60.0,
+  "fps_mean": 60.0,
+  "cpu": 332.7,
+  "cpuExLlvmpipe": 92.0,
+  "rssEnd": 798.9,
+  "pssEnd": 554.7,
+  "rssPeak": 815.7,
+  "pssPeak": 571.3,
+  "rssStart": 710.3,
+  "pssStart": 466.3,
+  "procs": [
+   "WebKitNetworkPr",
+   "WebKitWebProces",
+   "wry-xq-demo"
+  ]
+ },
+ "wry/4w": {
+  "runs": 3,
+  "sent": 299978,
+  "loss": 0,
+  "lat_p50": 91.5,
+  "lat_p99": 144.7,
+  "lat_max": 257.4,
+  "worst_window_p99": 146.1,
+  "fps_per_window": [
+   28.0,
+   29.0,
+   29.0,
+   29.0
+  ],
+  "fps_min_window": 28.0,
+  "fps_mean": 28.8,
+  "cpu": 577.7,
+  "cpuExLlvmpipe": 179.1,
+  "rssEnd": 2568.5,
+  "pssEnd": 1540.1,
+  "rssPeak": 2568.5,
+  "pssPeak": 1540.1,
+  "rssStart": 2310.1,
+  "pssStart": 1283.6,
+  "procs": [
+   "WebKitNetworkPr",
+   "WebKitWebProces",
+   "wry-xq-demo"
+  ]
+ },
+ "egui/1w": {
+  "runs": 3,
+  "sent": 299975,
+  "loss": 0,
+  "lat_p50": 30.0,
+  "lat_p99": 34.8,
+  "lat_max": 59.8,
+  "worst_window_p99": 34.8,
+  "fps_per_window": [
+   61.0
+  ],
+  "fps_min_window": 61.0,
+  "fps_mean": 61.0,
+  "cpu": 284.7,
+  "cpuExLlvmpipe": 13.5,
+  "rssEnd": 146.8,
+  "pssEnd": 104.9,
+  "rssPeak": 146.8,
+  "pssPeak": 104.9,
+  "rssStart": 146.8,
+  "pssStart": 104.9,
+  "procs": [
+   "egui-xq-demo"
+  ]
+ },
+ "egui/4w": {
+  "runs": 3,
+  "sent": 299966,
+  "loss": 0,
+  "lat_p50": 46.1,
+  "lat_p99": 78.3,
+  "lat_max": 127.1,
+  "worst_window_p99": 85.3,
+  "fps_per_window": [
+   29,
+   29,
+   29,
+   29
+  ],
+  "fps_min_window": 29,
+  "fps_mean": 29.0,
+  "cpu": 507.3,
+  "cpuExLlvmpipe": 18.4,
+  "rssEnd": 189.4,
+  "pssEnd": 135.5,
+  "rssPeak": 189.4,
+  "pssPeak": 135.5,
+  "rssStart": 189.1,
+  "pssStart": 135.2,
+  "procs": [
+   "egui-xq-demo"
+  ]
+ }
+}
+MULTI_EXIT 0

@@ -1,0 +1,42 @@
+==== 1w 2026-10-22 00:17:35
+   0.181 [xq-feed] 已連上 127.0.0.1:47631
+   0.248 BENCH first-frame
+   0.391 BENCH first-quote
+==== 1w 2026-10-22 00:19:41
+   0.162 [xq-feed] 已連上 127.0.0.1:47631
+   0.229 BENCH first-frame
+   0.371 BENCH first-quote
+==== 1w 2026-10-22 00:21:47
+   0.161 [xq-feed] 已連上 127.0.0.1:47631
+   0.232 BENCH first-frame
+   0.376 BENCH first-quote
+==== 4w 2026-10-22 00:23:53
+   0.167 [xq-feed] 已連上 127.0.0.1:47631
+   0.449 BENCH first-frame
+   0.590 BENCH first-frame
+   0.716 BENCH first-frame
+   0.837 BENCH first-frame
+   1.360 BENCH first-quote
+   1.360 BENCH first-quote
+   1.360 BENCH first-quote
+   1.361 BENCH first-quote
+==== 4w 2026-10-22 00:25:59
+   0.166 [xq-feed] 已連上 127.0.0.1:47631
+   0.451 BENCH first-frame
+   0.583 BENCH first-frame
+   0.691 BENCH first-frame
+   0.802 BENCH first-frame
+   1.334 BENCH first-quote
+   1.334 BENCH first-quote
+   1.334 BENCH first-quote
+   1.347 BENCH first-quote
+==== 4w 2026-10-22 00:28:05
+   0.155 [xq-feed] 已連上 127.0.0.1:47631
+   0.429 BENCH first-frame
+   0.558 BENCH first-frame
+   0.675 BENCH first-frame
+   0.792 BENCH first-frame
+   1.324 BENCH first-quote
+   1.325 BENCH first-quote
+   1.325 BENCH first-quote
+   1.325 BENCH first-quote

@@ -1,0 +1,110 @@
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+WryFeedHost — wry-xq-demo companion (TCP 127.0.0.1:47631)
+Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
+[WryFeedHost] listening 127.0.0.1:47631 flush=25ms bridge=demo-ticks (NOT live SysJust data)
+[WryFeedHost] client connected
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
+[WryFeedHost] client connected
+[WryFeedHost] subscribe n=33 chart=-
+[DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed

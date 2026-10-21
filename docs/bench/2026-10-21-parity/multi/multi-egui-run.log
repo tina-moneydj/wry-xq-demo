@@ -1,0 +1,30 @@
+==== 1w 2026-10-22 00:18:59
+   0.002 [egui] renderer=Glow
+   0.064 [xq-feed] 已連上 127.0.0.1:47631
+   0.140 BENCH first-frame
+   0.140 BENCH first-quote
+==== 1w 2026-10-22 00:21:05
+   0.002 [egui] renderer=Glow
+   0.061 [xq-feed] 已連上 127.0.0.1:47631
+   0.190 BENCH first-frame
+   0.190 BENCH first-quote
+==== 1w 2026-10-22 00:23:11
+   0.002 [egui] renderer=Glow
+   0.057 [xq-feed] 已連上 127.0.0.1:47631
+   0.122 BENCH first-frame
+   0.149 BENCH first-quote
+==== 4w 2026-10-22 00:25:17
+   0.002 [egui] renderer=Glow
+   0.053 [xq-feed] 已連上 127.0.0.1:47631
+   0.200 BENCH first-frame
+   0.200 BENCH first-quote
+==== 4w 2026-10-22 00:27:23
+   0.002 [egui] renderer=Glow
+   0.059 [xq-feed] 已連上 127.0.0.1:47631
+   0.229 BENCH first-frame
+   0.229 BENCH first-quote
+==== 4w 2026-10-22 00:29:29
+   0.002 [egui] renderer=Glow
+   0.055 [xq-feed] 已連上 127.0.0.1:47631
+   0.211 BENCH first-frame
+   0.211 BENCH first-quote

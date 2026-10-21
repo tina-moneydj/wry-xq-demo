@@ -1,0 +1,150 @@
+   0.090 
+   0.090 (wry-xq-demo:94041): dbind-WARNING **: 22:52:11.539: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+   0.102 [engine] 已連上 XQNext 127.0.0.1:47631
+   0.969 [ui] BENCH first-quote
+   1.104 [ui] BENCH first-frame
+   1.724 [ui] BENCH fps 46.4
+   2.313 [ui] GROUPPERF|{"phase":"tick-start","rows":50000,"cols":6,"tickHz":3000}
+   2.733 [ui] BENCH fps 58.5
+   3.733 [ui] BENCH fps 60.0
+   4.733 [ui] BENCH fps 59.9
+   5.733 [ui] BENCH fps 60.0
+   6.736 [ui] BENCH fps 59.9
+   7.750 [ui] BENCH fps 60.1
+   8.752 [ui] BENCH fps 59.9
+   9.765 [ui] BENCH fps 60.2
+  10.767 [ui] BENCH fps 59.9
+  11.782 [ui] BENCH fps 60.2
+  12.783 [ui] BENCH fps 59.9
+  13.797 [ui] BENCH fps 59.2
+  14.799 [ui] BENCH fps 59.9
+  15.814 [ui] BENCH fps 57.1
+  16.816 [ui] BENCH fps 55.9
+  17.819 [ui] BENCH fps 59.8
+  18.829 [ui] BENCH fps 58.4
+  19.837 [ui] BENCH fps 59.5
+  20.848 [ui] BENCH fps 58.4
+  21.851 [ui] BENCH fps 59.8
+  22.860 [ui] BENCH fps 60.5
+  23.863 [ui] BENCH fps 59.8
+  24.867 [ui] BENCH fps 59.8
+  25.882 [ui] BENCH fps 60.1
+  26.883 [ui] BENCH fps 59.9
+  27.900 [ui] BENCH fps 60.0
+  28.911 [ui] BENCH fps 60.3
+  29.913 [ui] BENCH fps 59.9
+  30.916 [ui] BENCH fps 59.8
+  31.919 [ui] BENCH fps 59.8
+  32.320 [ui] GROUPPERF|{"phase":"tick-end","fps":59.6,"elapsedMs":30007,"rows":50000,"cols":6,"paints":764,"cellUpdates":462,"lastPaintMs":0,"avgPaintMs":0.372,"avgCellsPerPaint":1,"scrollEvents":0,"jankCount":0,"jankAvgMs":0,"tickRate":3000,"selected":-1}
+  32.934 [ui] BENCH fps 60.1
+  33.936 [ui] BENCH fps 59.9
+  34.946 [ui] BENCH fps 57.4
+  35.950 [ui] BENCH fps 60.8
+  36.952 [ui] BENCH fps 59.9
+  37.969 [ui] BENCH fps 60.0
+  38.976 [ui] BENCH fps 59.5
+  39.980 [ui] BENCH fps 60.8
+  40.988 [ui] BENCH fps 59.5
+  42.001 [ui] BENCH fps 60.3
+  42.322 [ui] GROUPPERF|{"phase":"done","rows":50000,"cols":6,"maxCols":100,"tickFps":59.6,"scrollFps":59.8,"scrollJankCount":1,"scrollJankAvgMs":51,"lastPaintMs":0,"avgPaintMs":1.063,"avgCellsPerPaint":120,"paints":836,"cellUpdates":99948,"note":"virtualized rows+cols; incremental visible cells; synthetic not persisted"}
+----
+   0.086 
+   0.086 (wry-xq-demo:95760): dbind-WARNING **: 22:54:29.740: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+   0.097 [engine] 已連上 XQNext 127.0.0.1:47631
+   0.797 [ui] BENCH first-quote
+   0.859 [ui] BENCH first-frame
+   1.607 [ui] BENCH fps 51.8
+   2.210 [ui] GROUPPERF|{"phase":"tick-start","rows":50000,"cols":6,"tickHz":3000}
+   2.612 [ui] BENCH fps 56.7
+   3.613 [ui] BENCH fps 60.0
+   4.613 [ui] BENCH fps 59.0
+   5.612 [ui] BENCH fps 60.0
+   6.614 [ui] BENCH fps 58.9
+   7.627 [ui] BENCH fps 60.2
+   8.630 [ui] BENCH fps 59.8
+   9.643 [ui] BENCH fps 60.2
+  10.646 [ui] BENCH fps 59.8
+  11.662 [ui] BENCH fps 60.0
+  12.666 [ui] BENCH fps 59.8
+  13.679 [ui] BENCH fps 60.2
+  14.682 [ui] BENCH fps 59.9
+  15.696 [ui] BENCH fps 60.1
+  16.699 [ui] BENCH fps 59.9
+  17.710 [ui] BENCH fps 60.2
+  18.714 [ui] BENCH fps 54.8
+  19.725 [ui] BENCH fps 60.3
+  20.730 [ui] BENCH fps 59.6
+  21.744 [ui] BENCH fps 60.2
+  22.746 [ui] BENCH fps 59.9
+  23.753 [ui] BENCH fps 59.6
+  24.761 [ui] BENCH fps 60.5
+  25.762 [ui] BENCH fps 59.9
+  26.766 [ui] BENCH fps 59.8
+  27.775 [ui] BENCH fps 60.4
+  28.778 [ui] BENCH fps 59.9
+  29.782 [ui] BENCH fps 59.8
+  30.890 [ui] BENCH fps 55.1
+  31.892 [ui] BENCH fps 61.8
+  32.216 [ui] GROUPPERF|{"phase":"tick-end","fps":59.7,"elapsedMs":30005,"rows":50000,"cols":6,"paints":777,"cellUpdates":426,"lastPaintMs":0,"avgPaintMs":0.332,"avgCellsPerPaint":1,"scrollEvents":0,"jankCount":0,"jankAvgMs":0,"tickRate":3000,"selected":-1}
+  32.897 [ui] BENCH fps 59.8
+  33.905 [ui] BENCH fps 59.5
+  34.917 [ui] BENCH fps 60.3
+  35.929 [ui] BENCH fps 59.2
+  36.932 [ui] BENCH fps 59.9
+  37.946 [ui] BENCH fps 60.2
+  38.951 [ui] BENCH fps 59.6
+  39.962 [ui] BENCH fps 60.3
+  40.966 [ui] BENCH fps 59.8
+  41.980 [ui] BENCH fps 60.2
+  42.216 [ui] GROUPPERF|{"phase":"done","rows":50000,"cols":6,"maxCols":100,"tickFps":59.7,"scrollFps":59.9,"scrollJankCount":2,"scrollJankAvgMs":40.5,"lastPaintMs":1,"avgPaintMs":1.038,"avgCellsPerPaint":119,"paints":839,"cellUpdates":100200,"note":"virtualized rows+cols; incremental visible cells; synthetic not persisted"}
+----
+   0.096 
+   0.096 (wry-xq-demo:97762): dbind-WARNING **: 22:56:47.676: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+   0.109 [engine] 已連上 XQNext 127.0.0.1:47631
+   0.855 [ui] BENCH first-quote
+   1.078 [ui] BENCH first-frame
+   1.652 [ui] BENCH fps 46.9
+   2.277 [ui] GROUPPERF|{"phase":"tick-start","rows":50000,"cols":6,"tickHz":3000}
+   2.656 [ui] BENCH fps 55.8
+   3.656 [ui] BENCH fps 60.0
+   4.656 [ui] BENCH fps 60.0
+   5.656 [ui] BENCH fps 60.0
+   6.657 [ui] BENCH fps 59.9
+   7.673 [ui] BENCH fps 60.1
+   8.673 [ui] BENCH fps 59.9
+   9.690 [ui] BENCH fps 60.0
+  10.693 [ui] BENCH fps 59.8
+  11.704 [ui] BENCH fps 60.3
+  12.705 [ui] BENCH fps 59.9
+  13.710 [ui] BENCH fps 59.8
+  14.724 [ui] BENCH fps 60.2
+  15.725 [ui] BENCH fps 59.9
+  16.741 [ui] BENCH fps 60.1
+  17.741 [ui] BENCH fps 59.9
+  18.757 [ui] BENCH fps 60.1
+  19.757 [ui] BENCH fps 59.9
+  20.772 [ui] BENCH fps 60.1
+  21.773 [ui] BENCH fps 59.9
+  22.777 [ui] BENCH fps 59.8
+  23.787 [ui] BENCH fps 59.4
+  24.826 [ui] BENCH fps 57.7
+  25.839 [ui] BENCH fps 61.2
+  26.842 [ui] BENCH fps 59.9
+  27.855 [ui] BENCH fps 60.2
+  28.857 [ui] BENCH fps 59.9
+  29.873 [ui] BENCH fps 60.0
+  30.873 [ui] BENCH fps 60.0
+  31.888 [ui] BENCH fps 60.1
+  32.278 [ui] GROUPPERF|{"phase":"tick-end","fps":60,"elapsedMs":30000,"rows":50000,"cols":6,"paints":778,"cellUpdates":408,"lastPaintMs":0,"avgPaintMs":0.283,"avgCellsPerPaint":1,"scrollEvents":0,"jankCount":0,"jankAvgMs":0,"tickRate":3000,"selected":-1}
+  32.897 [ui] BENCH fps 59.5
+  33.911 [ui] BENCH fps 60.2
+  34.926 [ui] BENCH fps 60.1
+  35.941 [ui] BENCH fps 60.2
+  36.941 [ui] BENCH fps 59.9
+  37.955 [ui] BENCH fps 60.2
+  38.958 [ui] BENCH fps 59.8
+  39.972 [ui] BENCH fps 60.2
+  40.973 [ui] BENCH fps 59.9
+  41.989 [ui] BENCH fps 60.0
+  42.278 [ui] GROUPPERF|{"phase":"done","rows":50000,"cols":6,"maxCols":100,"tickFps":60,"scrollFps":60,"scrollJankCount":0,"scrollJankAvgMs":0,"lastPaintMs":1,"avgPaintMs":1.079,"avgCellsPerPaint":119,"paints":843,"cellUpdates":100692,"note":"virtualized rows+cols; incremental visible cells; synthetic not persisted"}
+----

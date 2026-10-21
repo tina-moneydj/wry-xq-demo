@@ -1,0 +1,13 @@
+==== exit=None
+   0.174 [xq-feed] 已連上 127.0.0.1:47631
+   0.232 BENCH first-frame
+   0.328 BENCH first-quote
+   0.617 CHARTPERF|{"phase":"setup-begin","indicatorSetupMs":1.10}
+   0.680 BENCH heavy-frame
+   0.680 CHARTPERF|{"phase":"setup","cssW":1166,"cssH":505,"overlays":20,"subs":8,"drawings":1000,"visibleDrawings":193,"drawVertices":9900,"bars":1200,"sinceStartMs":505,"rebuildMs":1.32,"paintMsTotal":12.81,"rssMb":203.1}
+   0.680 CHARTPHASE|warm|start
+   1.300 [metrics] fps=26 rss_mb=219.3 feed_frames/s=32 quote_rows/s=991 applies/s=25 apply_us_avg=54 chart_paints/s=75 chart_paint_us_avg=612 conn=Ready
+   2.301 [metrics] fps=21 rss_mb=219.5 feed_frames/s=29 quote_rows/s=906 applies/s=21 apply_us_avg=55 chart_paints/s=63 chart_paint_us_avg=873 conn=Ready
+ 499.758 [metrics] fps=4 rss_mb=219.6 feed_frames/s=6 quote_rows/s=198 applies/s=4 apply_us_avg=74 chart_paints/s=12 chart_paint_us_avg=870 conn=Ready
+ 499.768 CHARTPHASE|ticks|start
+----
