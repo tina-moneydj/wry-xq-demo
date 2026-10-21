@@ -51,6 +51,11 @@ impl PushBatch {
     }
 
     pub fn add_quotes(&mut self, quotes: Vec<Quote>, stamp: Option<[u64; 3]>) {
+        self.add_quotes_ref(&quotes, stamp);
+    }
+
+    /// 借用版：XQ_WINDOWS 多視窗時同一包報價合併進每個視窗的批次（穩定狀態不配置；只有新代號／改名才複製字串）
+    pub fn add_quotes_ref(&mut self, quotes: &[Quote], stamp: Option<[u64; 3]>) {
         self.raw += quotes.len() as u64;
         self.nev += 1;
         if let Some(st) = stamp {
@@ -64,7 +69,7 @@ impl PushBatch {
                 Some(&id) => {
                     let i = id as usize;
                     if !q.name.is_empty() && self.names[i] != q.name {
-                        self.names[i] = q.name;
+                        self.names[i].clone_from(&q.name);
                         self.name_dirty[i] = true;
                     }
                     id
@@ -72,8 +77,8 @@ impl PushBatch {
                 None => {
                     let id = self.syms.len() as u32;
                     self.ids.insert(q.symbol.clone(), id);
-                    self.syms.push(q.symbol);
-                    self.names.push(q.name);
+                    self.syms.push(q.symbol.clone());
+                    self.names.push(q.name.clone());
                     self.defined.push(false);
                     self.name_dirty.push(false);
                     self.pos.push(NONE);
@@ -308,5 +313,25 @@ mod tests {
         let o = other.unwrap();
         assert!(o.contains("[1,1.0,1.05,0.97,1.02,12]"), "{o}");
         assert!(o.contains("[2,1.0,1.04,1.01,1.03,3]"), "{o}");
+    }
+
+    #[test]
+    fn borrowed_merge_matches_owned_merge() {
+        // XQ_WINDOWS：其他視窗用 add_quotes_ref，送出的腳本要和主視窗完全一樣
+        let mk = || vec![q("A", 100, 1), q("B", 50, 5), q("A", 120, 3), q("C", 70, 2)];
+        let (mut a, mut b) = (PushBatch::default(), PushBatch::default());
+        a.add_quotes(mk(), Some([1, 10, 11]));
+        b.add_quotes_ref(&mk(), Some([1, 10, 11]));
+        let mut renamed = q("B", 55, 6);
+        renamed.name = "新名".into();
+        a.add_quotes(vec![renamed], None);
+        let mut renamed = q("B", 55, 6);
+        renamed.name = "新名".into();
+        b.add_quotes_ref(&[renamed], None);
+        let (qa, oa) = a.take_scripts(Some(99));
+        let (qa, oa) = (qa.map(str::to_string), oa);
+        let (qb, ob) = b.take_scripts(Some(99));
+        assert_eq!(qa.as_deref(), qb);
+        assert_eq!(oa, ob);
     }
 }

@@ -57,6 +57,8 @@ enum IpcMessage {
 #[derive(Debug)]
 enum UserEvent {
     Ipc(IpcMessage),
+    /// XQ_WINDOWS 的其他視窗（編號 k ≥ 1）送來的訊息：只處理 ready／log，其餘（存檔、訂閱、子網頁）以主視窗為準
+    PeerIpc(usize, IpcMessage),
     Navigate(String),
     ChildLoaded(String),
     /// 約每秒一次的程序記憶體取樣（含 WebView 子行程），給狀態列用。
@@ -143,8 +145,8 @@ fn main() -> wry::Result<()> {
     } else {
         String::new()
     };
-    let init_script = format!(
-        "window.XQ_STATE = {saved_state};{}{}{}{}{}{}{}",
+    let init_tail = format!(
+        "{}{}{}{}{}{}{}",
         chart_opts,
         stress_opts,
         if bench { " window.XQ_BENCH = true;" } else { "" },
@@ -153,17 +155,15 @@ fn main() -> wry::Result<()> {
         if group_stress { " window.XQ_GROUP_STRESS = true;" } else { "" },
         if wheel_perf { " window.XQ_WHEEL_PERF = true;" } else { "" }
     ) + if engine::tick_bench_enabled() { " window.XQ_TICK_BENCH = true;" } else { "" };
+    let init_script = format!("window.XQ_STATE = {saved_state};{init_tail}");
+    let ui_html = UI_HTML.replace("/*__CHART_JS__*/", CHART_JS).replace("/*__WATCHLIST_JS__*/", WATCHLIST_JS);
 
     // 1) 主 webview（先建立，在下層）。
     let ipc_proxy = proxy.clone();
     let main_builder = WebViewBuilder::new()
             .with_bounds(full_window_rect(&window))
             .with_initialization_script(&init_script)
-            .with_html(
-                UI_HTML
-                    .replace("/*__CHART_JS__*/", CHART_JS)
-                    .replace("/*__WATCHLIST_JS__*/", WATCHLIST_JS),
-            )
+            .with_html(ui_html.clone())
             .with_ipc_handler(move |request| {
                 match serde_json::from_str::<IpcMessage>(request.body()) {
                     Ok(message) => {
@@ -183,6 +183,41 @@ fn main() -> wry::Result<()> {
     };
     #[cfg(not(target_os = "linux"))]
     let main_view = build(main_builder)?;
+
+    // 1b) XQ_WINDOWS=N：再開 N-1 個看盤視窗（各一個主 webview，走勢圖＝自選第 k 檔）。
+    //     行情連線與解碼只有一份（engine 執行緒），每個視窗各自一個 PushBatch（同一包報價借用合併）、
+    //     各自 in-flight 1 批。WebView 架構使然：每個視窗的 JS 各存一份報價表資料（無法跨 webview 共用）。
+    let n_windows = std::env::var("XQ_WINDOWS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).clamp(1, 8);
+    let mut peers: Vec<PeerView> = Vec::new();
+    for k in 1..n_windows {
+        let w = WindowBuilder::new()
+            .with_title(format!("XQ 風格測試 (tao + wry) #{}", k + 1))
+            .with_inner_size(LogicalSize::new(1100.0, 720.0))
+            .with_min_inner_size(LogicalSize::new(640.0, 420.0))
+            .build(&event_loop)
+            .expect("無法建立視窗");
+        let script = format!("window.XQ_STATE = {};{init_tail} window.XQ_WINDOW = {k};", peer_state(&saved_state, k));
+        let p = proxy.clone();
+        let builder = WebViewBuilder::new()
+            .with_bounds(full_window_rect(&w))
+            .with_initialization_script(&script)
+            .with_html(ui_html.clone())
+            .with_ipc_handler(move |request| match serde_json::from_str::<IpcMessage>(request.body()) {
+                Ok(message) => {
+                    let _ = p.send_event(UserEvent::PeerIpc(k, message));
+                }
+                Err(error) => eprintln!("看不懂的 ipc 訊息 {:?}: {error}", request.body()),
+            });
+        #[cfg(target_os = "linux")]
+        let view = {
+            use tao::platform::unix::WindowExtUnix;
+            use wry::WebViewBuilderExtUnix;
+            builder.build_gtk(w.default_vbox().expect("tao default vbox"))?
+        };
+        #[cfg(not(target_os = "linux"))]
+        let view = builder.build_as_child(&w)?;
+        peers.push(PeerView { window: w, view, batch: push::PushBatch::default(), inflight: None });
+    }
 
     // 2) 子 webview：懶建立。空白右下不建第二個 WebKit，省約 250–300 MB RSS。
     //    開啟 http(s) 時再建；about:blank／Home 時 drop 銷毀。
@@ -229,15 +264,43 @@ fn main() -> wry::Result<()> {
             Some(t) if engine_batch.has_data() => ControlFlow::WaitUntil(t + ENGINE_ACK_TIMEOUT),
             _ => ControlFlow::Wait,
         };
+        for p in &peers {
+            if let (Some(t), true) = (p.inflight, p.batch.has_data()) {
+                let until = t + ENGINE_ACK_TIMEOUT;
+                *control_flow = match *control_flow {
+                    ControlFlow::WaitUntil(u) if u <= until => ControlFlow::WaitUntil(u),
+                    _ => ControlFlow::WaitUntil(until),
+                };
+            }
+        }
 
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 *control_flow = ControlFlow::Exit;
             }
             // 視窗大小改變：主 webview 跟著鋪滿。右下格的新位置由 JS 的 resize 事件回報。
-            Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
-                let _ = main_view.set_bounds(full_window_rect(&window));
+            Event::WindowEvent { window_id, event: WindowEvent::Resized(_), .. } => {
+                if window_id == window.id() {
+                    let _ = main_view.set_bounds(full_window_rect(&window));
+                } else if let Some(p) = peers.iter().find(|p| p.window.id() == window_id) {
+                    let _ = p.view.set_bounds(full_window_rect(&p.window));
+                }
             }
+            Event::UserEvent(UserEvent::PeerIpc(k, msg)) => match msg {
+                IpcMessage::Ready { resync } => {
+                    if let Some(p) = peers.get_mut(k - 1) {
+                        p.inflight = None;
+                        if resync {
+                            p.batch.resync();
+                        }
+                    }
+                }
+                IpcMessage::Log { msg } => match msg.strip_prefix("TICKBENCH|{") {
+                    Some(rest) => eprintln!("[ui] TICKBENCH|{{\"win\":{k},{rest}"),
+                    None => eprintln!("[ui#{}] {msg}", k + 1),
+                },
+                _ => {}
+            },
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Bounds { x, y, w, h })) => {
                 child_bounds = Rect {
                     position: PhysicalPosition::new(x.round() as i32, y.round() as i32).into(),
@@ -256,9 +319,10 @@ fn main() -> wry::Result<()> {
                     }
                 }
             }
-            Event::UserEvent(UserEvent::Ipc(IpcMessage::Log { msg })) => {
-                eprintln!("[ui] {msg}");
-            }
+            Event::UserEvent(UserEvent::Ipc(IpcMessage::Log { msg })) => match msg.strip_prefix("TICKBENCH|{") {
+                Some(rest) if !peers.is_empty() => eprintln!("[ui] TICKBENCH|{{\"win\":0,{rest}"),
+                _ => eprintln!("[ui] {msg}"),
+            },
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Save { data })) => {
                 if let Some(path) = state_file.clone() {
                     let _ = save_tx.send((path, data));
@@ -273,15 +337,37 @@ fn main() -> wry::Result<()> {
                     engine_batch.clear(); // 斷線後丟棄未刷行情，避免殘包晚到
                     engine_inflight = None;
                     let _ = main_view.evaluate_script("window.__enginePush&&window.__enginePush({down:true})");
+                    for p in peers.iter_mut() {
+                        p.batch.clear();
+                        p.inflight = None;
+                        let _ = p.view.evaluate_script("window.__enginePush&&window.__enginePush({down:true})");
+                    }
                 }
                 engine::Feed::Hello(ready) => {
-                    let _ = main_view.evaluate_script(&format!(
-                        "window.__enginePush&&window.__enginePush({{hello:{{ready:{ready}}}}})"
-                    ));
+                    let js = format!("window.__enginePush&&window.__enginePush({{hello:{{ready:{ready}}}}})");
+                    let _ = main_view.evaluate_script(&js);
+                    for p in &peers {
+                        let _ = p.view.evaluate_script(&js);
+                    }
                 }
-                engine::Feed::Quotes { quotes, stamp } => engine_batch.add_quotes(quotes, stamp),
-                engine::Feed::Intraday(v) => engine_batch.add_intraday(v),
-                engine::Feed::Minutes(bars) => engine_batch.add_minutes(bars),
+                engine::Feed::Quotes { quotes, stamp } => {
+                    for p in peers.iter_mut() {
+                        p.batch.add_quotes_ref(&quotes, stamp);
+                    }
+                    engine_batch.add_quotes(quotes, stamp)
+                }
+                engine::Feed::Intraday(v) => {
+                    for p in peers.iter_mut() {
+                        p.batch.add_intraday(v.clone());
+                    }
+                    engine_batch.add_intraday(v)
+                }
+                engine::Feed::Minutes(bars) => {
+                    for p in peers.iter_mut() {
+                        p.batch.add_minutes(bars.clone());
+                    }
+                    engine_batch.add_minutes(bars)
+                }
             },
             Event::UserEvent(UserEvent::Ipc(IpcMessage::Ready { resync })) => {
                 engine_inflight = None;
@@ -301,6 +387,20 @@ fn main() -> wry::Result<()> {
                         let _ = main_view.evaluate_script(js);
                         // 只有報價批會回 ready（分時／分鐘線很少，不佔 in-flight）
                         engine_inflight = Some(Instant::now());
+                    }
+                }
+                for p in peers.iter_mut() {
+                    let due = p.inflight.map_or(true, |t| t.elapsed() >= ENGINE_ACK_TIMEOUT);
+                    if due && p.batch.has_data() {
+                        let ev = tick_bench.then(engine::unix_us);
+                        let (quotes, other) = p.batch.take_scripts(ev);
+                        if let Some(js) = other {
+                            let _ = p.view.evaluate_script(&js);
+                        }
+                        if let Some(js) = quotes {
+                            let _ = p.view.evaluate_script(js);
+                            p.inflight = Some(Instant::now());
+                        }
                     }
                 }
             }
@@ -341,12 +441,62 @@ fn main() -> wry::Result<()> {
                     rss = rss_mb, mx = rss_max_mb, cpu = cpu_pct,
                 );
                 let _ = main_view.evaluate_script(&script);
+                for p in &peers {
+                    let _ = p.view.evaluate_script(&script);
+                }
             }
             _ => {}
         }
     });
 }
 
+
+/// XQ_WINDOWS 的其他視窗
+struct PeerView {
+    window: Window,
+    view: WebView,
+    batch: push::PushBatch,
+    inflight: Option<Instant>,
+}
+
+/// 第 k 個視窗的初始狀態：沿用主視窗的設定，只把上方作用中的走勢圖分頁換成自選第 k 檔
+/// （連同該分頁的指標設定 key 一起複製，畫面組成與主視窗相同）。
+fn peer_state(saved: &str, k: usize) -> String {
+    let Ok(mut v) = serde_json::from_str::<Value>(saved) else { return saved.to_string() };
+    let Some(sym) = v
+        .get("watchlist")
+        .and_then(|w| w.get(k))
+        .and_then(|s| s.as_str())
+        .map(str::to_string)
+    else {
+        return saved.to_string();
+    };
+    let active = v.pointer("/panes/top/active").and_then(|a| a.as_str()).map(str::to_string);
+    let mut old = None;
+    if let Some(tabs) = v.pointer_mut("/panes/top/tabs").and_then(|t| t.as_array_mut()) {
+        if let Some(tab) = tabs.iter_mut().find(|t| t.get("id").and_then(|i| i.as_str()) == active.as_deref()) {
+            old = tab.get("symbol").and_then(|s| s.as_str()).map(str::to_string);
+            tab["symbol"] = Value::String(sym.clone());
+            tab["title"] = Value::String(sym.clone());
+        }
+    }
+    if let (Some(old), Some(keys)) = (old, v.get_mut("keys").and_then(|k| k.as_object_mut())) {
+        let add: Vec<(String, Value)> = keys
+            .iter()
+            .filter_map(|(key, val)| {
+                let parts: Vec<&str> = key.split('|').collect();
+                let i = parts.iter().position(|p| *p == old)?;
+                let mut parts: Vec<String> = parts.iter().map(|p| p.to_string()).collect();
+                parts[i] = sym.clone();
+                Some((parts.join("|"), val.clone()))
+            })
+            .collect();
+        for (key, val) in add {
+            keys.entry(key).or_insert(val);
+        }
+    }
+    v.to_string()
+}
 
 /// 銷毀右下子 webview（drop → WebKitWebProcess / NetworkProcess 退出），並通知 JS 空白占位。
 fn destroy_child_webview(
@@ -508,4 +658,31 @@ fn cpu_pct(prev: (u64, u64), now: (u64, u64)) -> f64 {
     if dt <= 0.0 { return 0.0; }
     let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
     (dp / dt) * cpus * 100.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peer_state;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn peer_state_switches_active_chart_and_copies_indicator_keys() {
+        let saved = json!({
+            "watchlist": ["2330", "2317", "2454"],
+            "keys": {"2330|D": {"cfg": 1}, "chart-1|2330|D": {"cfg": 2}, "2317|W": {"cfg": 3}},
+            "panes": {"top": {"active": "chart-1", "tabs": [
+                {"id": "chart-1", "kind": "chart", "period": "D", "symbol": "2330", "title": "2330 台積電"},
+                {"id": "chart-2", "kind": "chart", "period": "W", "symbol": "2317", "title": "2317"}]}}
+        })
+        .to_string();
+        let v: Value = serde_json::from_str(&peer_state(&saved, 2)).unwrap();
+        assert_eq!(v["panes"]["top"]["tabs"][0]["symbol"], "2454");
+        assert_eq!(v["panes"]["top"]["tabs"][1]["symbol"], "2317");
+        assert_eq!(v["keys"]["chart-1|2454|D"], json!({"cfg": 2}));
+        assert_eq!(v["keys"]["2454|D"], json!({"cfg": 1}));
+        assert_eq!(v["keys"]["2330|D"], json!({"cfg": 1}));
+        // 沒有狀態／超出自選：原樣
+        assert_eq!(peer_state("null", 1), "null");
+        assert_eq!(peer_state(&saved, 9), saved);
+    }
 }
