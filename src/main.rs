@@ -582,6 +582,7 @@ fn save_state(path: &std::path::Path, data: &serde_json::Value) -> std::io::Resu
 
 
 /// 主行程 + 子孫 + WebKit/WebView2 相關子行程的 VmRSS 加總（MB）。
+#[cfg(not(windows))]
 fn rss_mb_tree(pid: u32) -> f64 {
     let mut total_kb = 0u64;
     let mut stack = vec![pid];
@@ -631,6 +632,7 @@ fn rss_mb_tree(pid: u32) -> f64 {
     total_kb as f64 / 1024.0
 }
 
+#[cfg(not(windows))]
 fn read_proc_times(pid: u32) -> (u64, u64) {
     let mut proc_t = 0u64;
     if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
@@ -651,6 +653,87 @@ fn read_proc_times(pid: u32) -> (u64, u64) {
     }
     (proc_t, total)
 }
+
+/// Windows：程序樹（本程式＋WebView2 的 msedgewebview2.exe 等子孫）——用 Toolhelp 快照找 parent。
+#[cfg(windows)]
+mod winproc {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, GetSystemTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    pub fn tree(root: u32) -> Vec<u32> {
+        let mut pairs = Vec::new();
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return vec![root];
+            }
+            let mut e: PROCESSENTRY32W = std::mem::zeroed();
+            e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if Process32FirstW(snap, &mut e) != 0 {
+                loop {
+                    pairs.push((e.th32ProcessID, e.th32ParentProcessID));
+                    if Process32NextW(snap, &mut e) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snap);
+        }
+        let mut out = vec![root];
+        let mut i = 0;
+        while i < out.len() {
+            let p = out[i];
+            for &(c, pp) in &pairs {
+                if pp == p && c != p && !out.contains(&c) {
+                    out.push(c);
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    fn ft(f: FILETIME) -> u64 {
+        ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64
+    }
+
+    /// (工作集 bytes, kernel+user 100ns)
+    fn proc_info(pid: u32) -> (u64, u64) {
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return (0, 0);
+            }
+            let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            let ws = if GetProcessMemoryInfo(h, &mut c, c.cb) != 0 { c.WorkingSetSize as u64 } else { 0 };
+            let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+            let (mut a, mut b, mut k, mut u) = (z, z, z, z);
+            let t = if GetProcessTimes(h, &mut a, &mut b, &mut k, &mut u) != 0 { ft(k) + ft(u) } else { 0 };
+            CloseHandle(h);
+            (ws, t)
+        }
+    }
+
+    pub fn rss_mb_tree(pid: u32) -> f64 {
+        tree(pid).into_iter().map(|p| proc_info(p).0).sum::<u64>() as f64 / (1024.0 * 1024.0)
+    }
+
+    /// (程序樹 CPU 時間, 全系統所有核心的 kernel+user 時間)，單位都是 100ns；kernel 已含 idle
+    pub fn read_proc_times(pid: u32) -> (u64, u64) {
+        let proc_t = tree(pid).into_iter().map(|p| proc_info(p).1).sum();
+        let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let (mut idle, mut k, mut u) = (z, z, z);
+        let total = unsafe { if GetSystemTimes(&mut idle, &mut k, &mut u) != 0 { ft(k) + ft(u) } else { 0 } };
+        (proc_t, total)
+    }
+}
+#[cfg(windows)]
+use winproc::{read_proc_times, rss_mb_tree};
 
 fn cpu_pct(prev: (u64, u64), now: (u64, u64)) -> f64 {
     let dp = now.0.saturating_sub(prev.0) as f64;
