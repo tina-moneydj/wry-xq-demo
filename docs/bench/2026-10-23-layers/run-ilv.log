@@ -1,0 +1,11 @@
+r1 wry L100 01:57:45 load=4.59
+r1 wry L1 01:58:58 load=6.95
+r1 gpui L100 02:00:10 load=7.90
+r1 gpui L1 02:01:23 load=8.64
+r1 egui L100 02:02:35 load=7.59
+r1 egui L1 02:03:47 load=8.39
+ab r1 base 02:04:58 load=8.06
+ab r1 new 02:05:20 load=8.61
+r2 wry L100 02:05:41 load=8.54
+r2 wry L1 02:06:54 load=8.28
+r2 gpui L100 02:08:06 load=9.89

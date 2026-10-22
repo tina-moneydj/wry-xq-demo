@@ -1,0 +1,96 @@
+   0.064 
+   0.064 (wry-xq-demo:150219): dbind-WARNING **: 02:06:55.472: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+   0.073 [engine] 已連上 XQNext 127.0.0.1:47651
+   0.650 [ui] BENCH first-quote
+   0.727 [ui] BENCH first-frame
+   1.044 [ui] BENCH heavy-frame
+   1.044 [ui] CHARTPERF|{"phase":"setup","sinceStartMs":566,"overlays":20,"overlayTypes":{"ma":11,"ema":5,"bb":2,"sar":2},"subsEnabled":8,"subIds":["vol","kd","macd","rsi","wr","dmi","atr","obv"],"subLayout":{"left":1,"right":3},"panesExpected":9,"drawings":1000,"period":"D","symbol":"2330","bars":1200,"cssW":1166,"cssH":512,"layers":1,"pick":500}
+   1.044 [ui] CHARTPHASE|warm|start
+   1.495 [ui] BENCH fps 37.4
+   2.500 [ui] BENCH fps 45.7
+   3.505 [ui] BENCH fps 46.8
+   4.054 [ui] CHARTPHASE|ticks|start
+   4.519 [ui] BENCH fps 41.7
+   5.533 [ui] BENCH fps 28.4
+   6.567 [ui] BENCH fps 29.2
+   7.565 [ui] BENCH fps 29.9
+   8.569 [ui] BENCH fps 27.9
+   9.579 [ui] BENCH fps 27.8
+  10.611 [ui] BENCH fps 31.0
+  11.629 [ui] BENCH fps 27.5
+  12.662 [ui] BENCH fps 31.0
+  13.690 [ui] BENCH fps 29.3
+  14.076 [ui] CHARTPERF|{"phase":"ticks","seconds":10.02,"frames":297,"fps":29.6,"avgPaintMs":6.081,"tickHz":29.6,"drawRebuilds":0,"rebuildMsTotal":0,"selPaints":0,"selMs":0}
+  14.076 [ui] CHARTPHASE|ticks|end
+  14.076 [ui] CHARTPHASE|crosshair|start
+  14.708 [ui] BENCH fps 30.4
+  15.738 [ui] BENCH fps 29.1
+  16.764 [ui] BENCH fps 29.2
+  17.777 [ui] BENCH fps 30.6
+  18.808 [ui] BENCH fps 29.1
+  19.815 [ui] BENCH fps 30.8
+  20.844 [ui] BENCH fps 31.1
+  21.880 [ui] BENCH fps 32.0
+  22.891 [ui] BENCH fps 30.6
+  23.923 [ui] BENCH fps 31.0
+  24.089 [ui] CHARTPERF|{"phase":"crosshair","seconds":10.01,"frames":304,"fps":30.4,"avgPaintMs":6.322,"tickHz":30.4,"drawRebuilds":0,"rebuildMsTotal":0,"selPaints":0,"selMs":0}
+  24.089 [ui] CHARTPHASE|crosshair|end
+  24.089 [ui] CHARTPHASE|pan|start
+  24.950 [ui] BENCH fps 21.5
+  25.988 [ui] BENCH fps 26.9
+  26.991 [ui] BENCH fps 22.0
+  28.051 [ui] BENCH fps 20.7
+  29.062 [ui] BENCH fps 20.8
+  30.077 [ui] BENCH fps 19.7
+  31.089 [ui] BENCH fps 24.7
+  32.117 [ui] BENCH fps 17.6
+  33.151 [ui] BENCH fps 25.0
+  34.119 [ui] CHARTPERF|{"phase":"pan","seconds":10.03,"frames":222,"fps":22.1,"avgPaintMs":7.477,"tickHz":22.1,"drawRebuilds":0,"rebuildMsTotal":0,"selPaints":0,"selMs":0}
+  34.119 [ui] CHARTPHASE|pan|end
+  34.119 [ui] CHARTPHASE|drag|start
+  34.203 [ui] BENCH fps 22.9
+  35.216 [ui] BENCH fps 34.3
+  36.224 [ui] BENCH fps 45.7
+  37.234 [ui] BENCH fps 46.5
+  38.240 [ui] BENCH fps 45.8
+  39.248 [ui] BENCH fps 42.6
+  40.264 [ui] BENCH fps 46.3
+  41.284 [ui] BENCH fps 42.2
+  42.303 [ui] BENCH fps 33.5
+  43.322 [ui] BENCH fps 38.2
+  44.196 [ui] CHARTPERF|{"phase":"drag","seconds":10.02,"frames":417,"fps":41.6,"avgPaintMs":6.381,"drawRebuilds":1,"rebuildMsTotal":10,"selPaints":622,"selMs":0.016,"layers":1,"drawingsTotal":1000,"pick":500}
+  44.196 [ui] CHARTPHASE|drag|end
+  44.196 [ui] CHARTPHASE|select|start
+  44.338 [ui] BENCH fps 38.4
+  45.364 [ui] BENCH fps 21.4
+  46.367 [ui] BENCH fps 26.9
+  47.386 [ui] BENCH fps 26.5
+  48.396 [ui] BENCH fps 26.8
+  49.440 [ui] BENCH fps 17.3
+  50.457 [ui] BENCH fps 17.7
+  51.477 [ui] BENCH fps 17.6
+  52.523 [ui] BENCH fps 18.2
+  53.533 [ui] BENCH fps 18.8
+  54.224 [ui] CHARTPERF|{"phase":"select","seconds":10,"frames":212,"fps":21.2,"avgPaintMs":13.632,"drawRebuilds":212,"rebuildMsTotal":854,"selPaints":106,"selMs":0.047,"layers":1,"drawingsTotal":1000,"pick":500,"allOps":211,"allRebuildP50":4,"allRebuildP99":10,"allTtfP50":46,"allTtfP99":74,"selectOps":106,"selectRebuildP50":4,"selectRebuildP99":9,"selectTtfP50":46,"selectTtfP99":71,"deselectOps":105,"deselectRebuildP50":4,"deselectRebuildP99":12,"deselectTtfP50":44,"deselectTtfP99":74}
+  54.224 [ui] CHARTPHASE|select|end
+  54.224 [ui] CHARTPHASE|reorder|start
+  54.559 [ui] BENCH fps 20.4
+  55.572 [ui] BENCH fps 16.8
+  56.594 [ui] BENCH fps 17.6
+  57.650 [ui] BENCH fps 19.1
+  58.661 [ui] BENCH fps 18.6
+  59.669 [ui] BENCH fps 21.9
+  60.700 [ui] BENCH fps 20.3
+  61.713 [ui] BENCH fps 20.7
+  62.738 [ui] BENCH fps 18.6
+  63.785 [ui] BENCH fps 20.1
+  64.258 [ui] CHARTPERF|{"phase":"reorder","seconds":10.02,"frames":194,"fps":19.4,"avgPaintMs":13.948,"drawRebuilds":194,"rebuildMsTotal":900,"selPaints":320,"selMs":0.034,"layers":1,"drawingsTotal":1000,"pick":500,"allOps":193,"allRebuildP50":5,"allRebuildP99":9,"allTtfP50":51,"allTtfP99":76,"zopOps":193,"zopRebuildP50":5,"zopRebuildP99":9,"zopTtfP50":51,"zopTtfP99":76}
+  64.258 [ui] CHARTPHASE|reorder|end
+  64.258 [ui] CHARTPHASE|zshot|start
+  64.791 [ui] BENCH fps 30.6
+  65.823 [ui] BENCH fps 48.5
+  66.836 [ui] BENCH fps 51.5
+  67.292 [ui] CHARTPERF|{"phase":"zshot","seconds":3,"frames":148,"fps":49.3,"avgPaintMs":1.203,"drawRebuilds":1,"rebuildMsTotal":0,"selPaints":149,"selMs":0.04,"layers":3,"drawingsTotal":7}
+  67.292 [ui] CHARTPHASE|zshot|end
+  67.292 [ui] CHARTPERF|{"phase":"done","sinceStartMs":66815}
+----
