@@ -9,3 +9,17 @@ ab r1 new 02:05:20 load=8.61
 r2 wry L100 02:05:41 load=8.54
 r2 wry L1 02:06:54 load=8.28
 r2 gpui L100 02:08:06 load=9.89
+r2 gpui L1 02:09:19 load=10.10
+r2 egui L100 02:10:31 load=9.51
+r2 egui L1 02:11:43 load=8.64
+ab r2 base 02:12:55 load=7.81
+ab r2 new 02:13:16 load=8.06
+r3 wry L100 02:13:37 load=7.87
+r3 wry L1 02:14:50 load=9.60
+r3 gpui L100 02:16:03 load=7.24
+r3 gpui L1 02:17:15 load=8.82
+r3 egui L100 02:18:28 load=9.08
+r3 egui L1 02:19:39 load=6.80
+ab r3 base 02:20:51 load=6.22
+ab r3 new 02:21:12 load=7.55
+ILV_DONE 02:21:34

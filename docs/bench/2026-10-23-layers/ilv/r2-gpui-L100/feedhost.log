@@ -7,3 +7,5 @@ Mode: --demo-ticks  *** path-test ONLY — NOT live SysJust / XQNext data ***
 [WryFeedHost] client connected
 [WryFeedHost] subscribe n=33 chart=-
 [DemoTicks] path-test subscribe n=33 chart=- — synthetic, not live
+[WryFeedHost] client disconnected
+[DemoTicks] unsubscribed
