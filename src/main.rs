@@ -130,14 +130,15 @@ fn main() -> wry::Result<()> {
         env_num("XQ_STRESS_TICK_HZ")
     );
     // XQ_CHART_STRESS=1：重圖表壓測（20 疊加＋全部副圖＋1000 畫線，跳價／十字線／平移）。
-    // 參數 XQ_CHART_TOP_RATIO（上方走勢圖佔比）XQ_CHART_DRAWINGS XQ_CHART_WARM_MS XQ_CHART_PHASE_MS XQ_CHART_WAIT_MS
+    // 參數 XQ_CHART_TOP_RATIO（上方走勢圖佔比）XQ_CHART_DRAWINGS XQ_CHART_LAYERS（畫線分幾層，預設 100）XQ_CHART_WARM_MS XQ_CHART_PHASE_MS XQ_CHART_WAIT_MS
     let chart_stress = std::env::var_os("XQ_CHART_STRESS").is_some_and(|v| v != "0");
     let chart_opts = if chart_stress {
         let f = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
         format!(
-            " window.XQ_CHART_STRESS = true; window.XQ_PERF = true; window.XQ_CHART_OPTS = {{topRatio:{},drawings:{},warmMs:{},phaseMs:{},waitMs:{}}};",
+            " window.XQ_CHART_STRESS = true; window.XQ_PERF = true; window.XQ_CHART_OPTS = {{topRatio:{},drawings:{},layers:{},warmMs:{},phaseMs:{},waitMs:{}}};",
             f("XQ_CHART_TOP_RATIO"),
             std::env::var("XQ_CHART_DRAWINGS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(1000),
+            std::env::var("XQ_CHART_LAYERS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(100).clamp(1, 200),
             f("XQ_CHART_WARM_MS"),
             f("XQ_CHART_PHASE_MS"),
             f("XQ_CHART_WAIT_MS")

@@ -460,6 +460,9 @@
   store.ui = store.ui && typeof store.ui === "object" ? store.ui : {};
   ensureSubLayout();
   let saveTimer = 0;
+  // 上下順序（同 layers.rs ZOp）：[id, 名稱, 快捷鍵]
+  const ZOPS = [["forward", "上移一層", "Ctrl+]"], ["backward", "下移一層", "Ctrl+["], ["front", "移到最上", "Ctrl+Shift+]"], ["back", "移到最下", "Ctrl+Shift+["]];
+
   function save() {
     if (window.XQ_PERF) return; // 效能測試不要寫 state
     clearTimeout(saveTimer);
@@ -535,7 +538,16 @@
     let drawGen = 0;
     let drawPanDx = 0; // 平移時快取層水平偏移（CSS px）；鬆手後重建清零
     let drawCache = { stable: "", right: 0, barW: 0, lo: NaN, hi: NaN };
-    let spatial = { cell: 64, cols: 0, rows: 0, buckets: [], geoms: [] };
+    let spatial = { cell: 64, cols: 0, rows: 0, buckets: [], geoms: [], key: "" };
+    // 三明治上段：疊在選取那條之上的畫線（下段 = drawLayer；選取那條每幀即時畫在兩段之間）
+    const aboveLayer = document.createElement("canvas");
+    const aboveG = aboveLayer.getContext("2d");
+    let aboveCount = 0;
+    // 圖層：entry.layers（陣列位置 = 由下到上），畫線 d.layer = 圖層 id（沒寫 = 0）
+    let activeLayer = 0;
+    let ord = null, ordGen = -1;
+    // 壓測計數：上下兩段重建次數／耗時、選取那片每幀耗時
+    const zperf = { rebuilds: 0, rebuildMs: 0, selPaints: 0, selMs: 0 };
     // 分頁切換：先貼上一幀快照，再延後重算（避免卡頓）
     const tabSnaps = new Map(); // tabId -> { canvas, ctx, cssW, cssH }
     let switchDeferToken = 0;
@@ -596,6 +608,8 @@
       return false;
     }
     function markDrawingsDirty() { drawLayerDirty = true; spatialDirty = true; drawGen++; drawPanDx = 0; }
+    /** 只換選取：上下兩段要重切，但幾何／空間索引／繪製順序不變 */
+    function markSelectionDirty() { drawLayerDirty = true; }
     /** 不含 v.right：純平移可用快取平移，不必重畫 1000 條工具 */
     function stableDrawFingerprint(L, v) {
       const pr = L && L.panes && L.panes[0];
@@ -620,12 +634,109 @@
       ensureOverlays(entry);
       if (!Array.isArray(entry.drawings)) entry.drawings = [];
       entry.drawings = entry.drawings.filter(d => d && NEED[d.type] && Array.isArray(d.pts));
+      normalizeLayers(entry);
+      activeLayer = entry.layers[entry.layers.length - 1].id;
       lastCfg = entry.cfg;
       selected = -1; pending = null; drag = null;
       markDrawingsDirty();
     }
     const cfg = () => entry.cfg;
     const drawings = () => entry.drawings;
+    const layers = () => entry.layers;
+    const layerOf = d => d.layer || 0;
+    // ---------- 圖層與上下順序（規則與 gpui／egui 的 layers.rs 相同） ----------
+    const MAX_LAYERS = 200;
+    const newLayer = id => ({ id, name: `圖層 ${id + 1}`, visible: true, locked: false });
+    /** 補齊圖層：沒有 → 一個預設層；畫線指到不存在的圖層 → 依 id 補建在最上面（舊存檔相容） */
+    function normalizeLayers(e) {
+      if (!Array.isArray(e.layers)) e.layers = [];
+      e.layers = e.layers.filter(l => l && Number.isFinite(l.id)).map(l => ({ id: l.id, name: l.name || `圖層 ${l.id + 1}`, visible: l.visible !== false, locked: !!l.locked }));
+      if (!e.layers.length) e.layers.push(newLayer(0));
+      const have = new Set(e.layers.map(l => l.id));
+      const missing = [...new Set(e.drawings.map(layerOf).filter(id => !have.has(id)))].sort((a, b) => a - b);
+      for (const id of missing) { if (e.layers.length >= MAX_LAYERS) break; e.layers.push(newLayer(id)); }
+    }
+    /** 繪製順序：order = 由下到上的畫線索引（不含隱藏圖層）；rank[k] = 位置（隱藏 = -1）；locked[k] = 點不到 */
+    function order() {
+      if (ord && ordGen === drawGen) return ord;
+      const L = layers(), list = drawings();
+      const pos = new Map(L.map((l, i) => [l.id, i]));
+      const buckets = L.map(() => []);
+      if (!buckets.length) buckets.push([]);
+      const locked = new Uint8Array(list.length);
+      for (let k = 0; k < list.length; k++) {
+        const li = pos.has(layerOf(list[k])) ? pos.get(layerOf(list[k])) : 0, l = L[li];
+        if (!l) { buckets[0].push(k); continue; }
+        if (!l.visible) continue;
+        locked[k] = l.locked ? 1 : 0;
+        buckets[li].push(k);
+      }
+      const out = [];
+      for (const b of buckets) for (const k of b) out.push(k);
+      const rank = new Int32Array(list.length).fill(-1);
+      for (let r = 0; r < out.length; r++) rank[out[r]] = r;
+      ord = { order: out, rank, locked };
+      ordGen = drawGen;
+      return ord;
+    }
+    const pickable = (o, k) => o.rank[k] >= 0 && !o.locked[k];
+    /** 在畫線自己的圖層內調整上下順序；回傳新索引（沒動 = -1） */
+    function applyZop(list, k, op) {
+      const layer = layerOf(list[k]), same = i => layerOf(list[i]) === layer;
+      let up = -1, down = -1;
+      for (let i = k + 1; i < list.length; i++) if (same(i)) { up = i; break; }
+      for (let i = k - 1; i >= 0; i--) if (same(i)) { down = i; break; }
+      let target;
+      if (op === "forward") target = up;
+      else if (op === "backward") target = down;
+      else if (op === "front") target = up >= 0 ? list.length - 1 : -1;
+      else target = down >= 0 ? 0 : -1;
+      if (target < 0) return -1;
+      const [d] = list.splice(k, 1);
+      list.splice(target, 0, d);
+      return target;
+    }
+    function zop(op) {
+      if (drag || textCtx || selected < 0 || !drawings()[selected]) return false;
+      const nk = applyZop(drawings(), selected, op);
+      if (nk < 0) return false;
+      selected = nk;
+      markDrawingsDirty(); save(); sync(); refreshLayerMenu(); requestRender();
+      return true;
+    }
+    /** 圖層改了：選取的那條如果變成隱藏／鎖定就取消選取 */
+    function layersChanged() {
+      if (selected >= 0) {
+        const d = drawings()[selected], l = d && layers().find(x => x.id === layerOf(d));
+        if (!l || !l.visible || l.locked) { selected = -1; drag = null; }
+      }
+      markDrawingsDirty(); save(); sync(); refreshLayerMenu(); requestRender();
+      return true;
+    }
+    function layerToggleVisible(id) { const l = layers().find(x => x.id === id); if (!l) return false; l.visible = !l.visible; return layersChanged(); }
+    function layerToggleLock(id) { const l = layers().find(x => x.id === id); if (!l) return false; l.locked = !l.locked; return layersChanged(); }
+    function layerMove(id, up) {
+      const L = layers(), i = L.findIndex(x => x.id === id), j = up ? i + 1 : i - 1;
+      if (i < 0 || j < 0 || j >= L.length) return false;
+      [L[i], L[j]] = [L[j], L[i]];
+      return layersChanged();
+    }
+    function layerAdd() {
+      const L = layers();
+      if (L.length >= MAX_LAYERS) return false;
+      const id = L.reduce((m, l) => Math.max(m, l.id + 1), 0);
+      L.push(newLayer(id)); activeLayer = id;
+      return layersChanged();
+    }
+    function setActiveLayer(id) { if (activeLayer === id || !layers().some(l => l.id === id)) return false; activeLayer = id; refreshLayerMenu(); return true; }
+    function moveSelectedToLayer(id) {
+      const list = drawings();
+      if (selected < 0 || !list[selected] || !layers().some(l => l.id === id) || layerOf(list[selected]) === id) return false;
+      const [d] = list.splice(selected, 1);
+      if (id) d.layer = id; else delete d.layer;
+      list.push(d); selected = list.length - 1;
+      return layersChanged();
+    }
     // 分時若已從 engine 收到分鐘 K，就不要再用假資料。key 是畫面代號（2330），不是 2330.TW。
     const engineIntraday = {};
     const engineAnchored = {};
@@ -683,6 +794,7 @@
     for (const [id, label] of PERIODS) mkBtn(gp, "period:" + id, label, () => setPeriod(id));
     gp = mkGroup();
     mkBtn(gp, "ind", "指標 ▾", b => toggleMenu(indMenu, b));
+    mkBtn(gp, "layers", "圖層 ▾", b => toggleMenu(layerMenu, b));
     gp = mkGroup();
     mkBtn(gp, "reset", "重設縮放", () => { delete views[key()]; render(); });
 
@@ -720,6 +832,53 @@
       return m;
     }
     const indMenu = makeMenu("ind-menu");
+    const layerMenu = makeMenu("layer-menu");
+    /** 圖層面板：選取畫線的上下順序＋圖層清單（最上層在最上面；顯示／鎖定／上移／下移；點名稱設為作用中圖層） */
+    function buildLayerMenu() {
+      layerMenu.innerHTML = "";
+      const list = drawings(), L = layers();
+      const selLayer = selected >= 0 && list[selected] ? layerOf(list[selected]) : null;
+      const hasSel = selLayer !== null;
+      const mk = (parent, label, onClick, opts = {}) => {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = label;
+        if (opts.on) b.classList.add("on");
+        if (opts.disabled) b.disabled = true;
+        if (opts.title) b.title = opts.title;
+        b.addEventListener("click", e => { e.stopPropagation(); onClick(); });
+        parent.appendChild(b); return b;
+      };
+      const h = document.createElement("div"); h.className = "menu-title";
+      h.textContent = hasSel ? "選取的畫線（在自己的圖層內調整）" : "選取一條畫線後可調整上下順序";
+      layerMenu.appendChild(h);
+      const zr = document.createElement("div"); zr.className = "layer-zops";
+      for (const [op, label, keys] of ZOPS) mk(zr, `${label}（${keys}）`, () => zop(op), { disabled: !hasSel });
+      mk(zr, "移到作用中圖層", () => moveSelectedToLayer(activeLayer), { disabled: !hasSel || selLayer === activeLayer });
+      layerMenu.appendChild(zr);
+      const h2 = document.createElement("div"); h2.className = "menu-title layer-head";
+      const t = document.createElement("span"); t.textContent = `圖層（${L.length}，上面的蓋住下面的）`;
+      h2.appendChild(t);
+      mk(h2, "+ 新圖層", () => layerAdd(), { disabled: L.length >= MAX_LAYERS });
+      layerMenu.appendChild(h2);
+      const counts = new Map();
+      for (const d of list) counts.set(layerOf(d), (counts.get(layerOf(d)) || 0) + 1);
+      const rows = document.createElement("div"); rows.className = "layer-rows";
+      for (let pos = L.length - 1; pos >= 0; pos--) {
+        const l = L[pos], id = l.id;
+        const row = document.createElement("div"); row.className = "layer-row" + (id === activeLayer ? " active" : "");
+        mk(row, l.visible ? "顯示" : "隱藏", () => layerToggleVisible(id), { on: !l.visible });
+        mk(row, l.locked ? "鎖定" : "未鎖", () => layerToggleLock(id), { on: l.locked });
+        const nm = document.createElement("span"); nm.className = "layer-name" + (l.visible ? "" : " off");
+        nm.textContent = `${id === activeLayer ? "▶ " : ""}${l.name}（${counts.get(id) || 0}）${selLayer === id ? " ●" : ""}`;
+        nm.title = "設為作用中圖層（新畫線放這層）";
+        nm.addEventListener("click", e => { e.stopPropagation(); setActiveLayer(id); });
+        row.appendChild(nm);
+        mk(row, "▲", () => layerMove(id, true), { disabled: pos + 1 >= L.length });
+        mk(row, "▼", () => layerMove(id, false), { disabled: pos <= 0 });
+        rows.appendChild(row);
+      }
+      layerMenu.appendChild(rows);
+    }
+    function refreshLayerMenu() { if (!layerMenu.hidden) buildLayerMenu(); }
     function buildIndMenu() {
       indMenu.innerHTML = "";
       ensureOverlays(entry);
@@ -804,6 +963,7 @@
       closeMenus();
       if (!open) return;
       if (menu === indMenu) buildIndMenu();
+      if (menu === layerMenu) buildLayerMenu();
       const hr = host.getBoundingClientRect(), ar = anchor.getBoundingClientRect();
       menu.hidden = false;
       const left = Math.max(2, Math.min(ar.left - hr.left, hr.width - menu.offsetWidth - 4));
@@ -811,7 +971,7 @@
       menu.style.top = ar.bottom - hr.top + 2 + "px";
       menu.style.maxHeight = Math.max(80, hr.bottom - ar.bottom - 8) + "px"; // 不超出上方走勢圖格（避免被右下網頁蓋住）
     }
-    function closeMenus() { indMenu.hidden = true; }
+    function closeMenus() { indMenu.hidden = true; layerMenu.hidden = true; }
     document.addEventListener("mousedown", () => closeMenus());
 
     function sync() {
@@ -838,7 +998,7 @@
     }
     function deleteSelected() {
       if (selected >= 0) { drawings().splice(selected, 1); selected = -1; save(); markDrawingsDirty(); }
-      sync();
+      sync(); refreshLayerMenu();
     }
 
     // ---------- 重繪 ----------
@@ -1253,7 +1413,14 @@
       return { minX: minX - p, minY: minY - p, maxX: maxX + p, maxY: maxY + p };
     }
 
-    function paintOneDrawing(ctx, d, idx, L, G, isPending) {
+    function paintHandles(ctx, hs, col) {
+      ctx.fillStyle = col;
+      for (const h of hs) {
+        ctx.fillRect(h.x - 4, h.y - 4, 8, 8);
+        ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.strokeRect(h.x - 4.5, h.y - 4.5, 9, 9);
+      }
+    }
+    function paintOneDrawing(ctx, d, idx, L, G, isPending, noHandles) {
       const sel = !isPending && idx === selected, col = sel ? C.sel : C.draw;
       ctx.lineWidth = sel ? 2 : 1.4; ctx.strokeStyle = col;
       if (G.fill) {
@@ -1277,19 +1444,13 @@
         ctx.beginPath(); for (const [p, q] of G.segs) { ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); } ctx.stroke();
         if (G.mid) { ctx.setLineDash([4, 4]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(G.mid[0].x, G.mid[0].y); ctx.lineTo(G.mid[1].x, G.mid[1].y); ctx.stroke(); ctx.setLineDash([]); }
       }
-      if (sel || isPending) {
-        ctx.fillStyle = col;
-        for (const h of G.handles) {
-          ctx.fillRect(h.x - 4, h.y - 4, 8, 8);
-          ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.strokeRect(h.x - 4.5, h.y - 4.5, 9, 9);
-        }
-      }
+      if ((sel || isPending) && !noHandles) paintHandles(ctx, G.handles, col);
     }
 
-    function paintHlineLabels(ctx, L, list) {
+    function paintHlineLabels(ctx, L, pairs) {
       const pr = L.panes[0];
       const axisX = L.plotR;
-      list.forEach((d, idx) => {
+      pairs.forEach(([d, idx]) => {
         if (d.type !== "hline") return;
         const y = pr.yOf(d.pts[0].p);
         if (y <= pr.top + 8 || y >= pr.top + pr.h - 8) return;
@@ -1303,6 +1464,7 @@
       const w = Math.max(1, Math.round(cssW * dpr)), h = Math.max(1, Math.round(cssH * dpr));
       if (drawLayer.width !== w || drawLayer.height !== h) {
         drawLayer.width = w; drawLayer.height = h;
+        aboveLayer.width = w; aboveLayer.height = h;
         drawLayerDirty = true;
       }
     }
@@ -1327,31 +1489,42 @@
         const r1 = Math.min(rows - 1, Math.floor(bb.maxY / cell));
         for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) buckets[r * cols + c].push(k);
       }
-      spatial = { cell, cols, rows, buckets, geoms };
+      spatial = { cell, cols, rows, buckets, geoms, key: spatialKey(L) };
       spatialDirty = false;
     }
 
+    /** 空間索引的鍵：尺度＋畫線內容＋right（不含選取：換選取不必重建索引） */
+    function spatialKey(L) {
+      const v = view(), pr = L && L.panes && L.panes[0];
+      return [cssW, cssH, period, drawGen, v.barW, v.right, L.plotL, L.plotR, pr && pr.lo, pr && pr.hi, pr && pr.top, pr && pr.h].join("|");
+    }
+    function paintSegment(ctx, L, idxs) {
+      const dpr = window.devicePixelRatio || 1, pr = L.panes[0], list = drawings();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      if (!idxs.length) return;
+      ctx.font = "11px sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.save();
+      ctx.beginPath(); ctx.rect(L.plotL, pr.top, L.plotW, pr.h); ctx.clip();
+      for (const idx of idxs) paintOneDrawing(ctx, list[idx], idx, L, geom(list[idx], L), false);
+      ctx.restore();
+      ctx.lineWidth = 1;
+    }
+    /** 依（圖層順位, 圖層內順位）切成 下段／選取那條／上段；只有下段、上段進快取（水平線也進：平移時與其他畫線一起位移） */
     function rebuildDrawLayer(L) {
       const dpr = window.devicePixelRatio || 1;
       ensureDrawLayerSize(dpr);
-      drawG.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawG.clearRect(0, 0, cssW, cssH);
-      drawG.font = "11px sans-serif";
-      drawG.textBaseline = "middle";
-      const pr = L.panes[0], list = drawings();
       const v = view();
       L._measureCtx = drawG;
-      // selected／hline 不進快取：hline 是視窗寬度線，平移時改即時畫才正確
-      drawG.save();
-      drawG.beginPath(); drawG.rect(L.plotL, pr.top, L.plotW, pr.h); drawG.clip();
-      for (let idx = 0; idx < list.length; idx++) {
-        if (idx === selected) continue;
-        const d = list[idx];
-        if (d.type === "hline") continue;
-        paintOneDrawing(drawG, d, idx, L, geom(d, L), false);
-      }
-      drawG.restore();
-      drawG.lineWidth = 1;
+      const t0 = performance.now();
+      const o = order();
+      const r = selected >= 0 && selected < o.rank.length ? o.rank[selected] : -1;
+      const lo = r >= 0 ? o.order.slice(0, r) : o.order, hi = r >= 0 ? o.order.slice(r + 1) : [];
+      paintSegment(drawG, L, lo);
+      if (hi.length || aboveCount) paintSegment(aboveG, L, hi);
+      aboveCount = hi.length;
+      zperf.rebuilds++; zperf.rebuildMs += performance.now() - t0;
       drawLayerDirty = false;
       drawPanDx = 0;
       const pr0 = L.panes && L.panes[0];
@@ -1362,10 +1535,10 @@
         lo: pr0 && pr0.lo,
         hi: pr0 && pr0.hi,
       };
-      rebuildSpatial(L);
+      if (spatialDirty || spatial.key !== spatialKey(L)) rebuildSpatial(L);
     }
 
-    function blitDrawLayer(L, dxCss) {
+    function blitDrawLayer(L, dxCss, src) {
       const dpr = window.devicePixelRatio || 1;
       const pr = L.panes[0];
       // 只在主圖繪圖區貼上，並依平移偏移
@@ -1374,63 +1547,49 @@
       const x0 = L.plotL * dpr, y0 = pr.top * dpr, w = L.plotW * dpr, h = pr.h * dpr;
       g.beginPath(); g.rect(x0, y0, w, h); g.clip();
       const ox = dxCss * dpr;
-      g.drawImage(drawLayer, x0, y0, w, h, x0 + ox, y0, w, h);
+      g.drawImage(src || drawLayer, x0, y0, w, h, x0 + ox, y0, w, h);
       g.restore();
     }
 
-    function paintLiveHlines(L, list) {
-      const pr = L.panes[0];
-      const hlines = [];
-      for (let idx = 0; idx < list.length; idx++) {
-        if (list[idx].type !== "hline") continue;
-        if (idx === selected) continue; // selected 走下面 live 路徑
-        hlines.push([list[idx], idx]);
-      }
-      if (!hlines.length) return;
-      L._measureCtx = g;
-      g.save();
-      g.beginPath(); g.rect(L.plotL, pr.top, L.plotW, pr.h); g.clip();
-      for (const [d, idx] of hlines) paintOneDrawing(g, d, idx, L, geom(d, L), false);
-      g.restore(); g.lineWidth = 1;
-      paintHlineLabels(g, L, hlines.map(x => x[0]));
-    }
-
+    /** 畫線三明治：下段（快取）→ 選取那條（原本順位，每幀即時）→ 上段（快取）→ 控制點／繪製中（最上面） */
     function compositeDrawLayer(L) {
       const v = view();
       const stable = stableDrawFingerprint(L, v);
-      // barW／尺度／選取變更 → 重建；僅 right 變 → 平移快取
+      // barW／尺度／選取／順序變更 → 重建；僅 right 變 → 平移快取
       if (drawLayerDirty || stable !== drawCache.stable || v.barW !== drawCache.barW) {
         rebuildDrawLayer(L);
       } else {
         drawPanDx = -(v.right - drawCache.right) * v.barW;
         if (spatialDirty) rebuildSpatial(L);
       }
-      blitDrawLayer(L, drawPanDx);
+      blitDrawLayer(L, drawPanDx, drawLayer);
 
-      const list = drawings();
-      // 水平線永遠依目前視窗即時畫（與平移無關）
-      paintLiveHlines(L, list);
-
-      // pending／selected 每幀即時疊上
-      const live = [];
-      if (selected >= 0 && list[selected]) live.push([list[selected], selected, false]);
-      if (pending) live.push([pending, -1, true]);
-      if (live.length) {
-        const pr = L.panes[0];
+      const list = drawings(), o = order(), pr = L.panes[0];
+      const selD = selected >= 0 && o.rank[selected] >= 0 ? list[selected] : null;
+      if (selD) {
+        const t0 = performance.now();
         L._measureCtx = g;
         g.save();
         g.beginPath(); g.rect(L.plotL, pr.top, L.plotW, pr.h); g.clip();
-        for (const [d, idx, isPending] of live) paintOneDrawing(g, d, idx, L, geom(d, L), isPending);
+        paintOneDrawing(g, selD, selected, L, geom(selD, L), false, true);
         g.restore(); g.lineWidth = 1;
-        if (selected >= 0 && list[selected] && list[selected].type === "hline") {
-          const d = list[selected];
-          const y = pr.yOf(d.pts[0].p);
-          if (y > pr.top + 8 && y < pr.top + pr.h - 8) {
-            const text = fmtP(d.pts[0].p);
-            g.fillStyle = "#666"; g.fillRect(L.plotR + 1, y - 8, AXIS_W - 2, 16);
-            g.fillStyle = "#fff"; g.textAlign = "left"; g.fillText(text, L.plotR + 5, y);
-          }
-        }
+        zperf.selPaints++; zperf.selMs += performance.now() - t0;
+      }
+      if (aboveCount) blitDrawLayer(L, drawPanDx, aboveLayer);
+
+      // 水平線的價格標籤（在價格軸上，不隨平移位移）
+      const hl = [];
+      for (const k of o.order) if (list[k].type === "hline") hl.push([list[k], k]);
+      if (hl.length) paintHlineLabels(g, L, hl);
+
+      // 控制點與繪製中的那條永遠在最上面
+      if (selD || pending) {
+        L._measureCtx = g;
+        g.save();
+        g.beginPath(); g.rect(L.plotL, pr.top, L.plotW, pr.h); g.clip();
+        if (pending) paintOneDrawing(g, pending, -1, L, geom(pending, L), true);
+        if (selD) paintHandles(g, geom(selD, L).handles, C.sel);
+        g.restore(); g.lineWidth = 1;
       }
     }
 
@@ -1461,41 +1620,42 @@
       const list = drawings();
       // 平移中空間索引仍是快取座標：把指標轉回快取空間
       const q = (drawPanDx && Math.abs(drawPanDx) > 0.01) ? { x: p.x - drawPanDx, y: p.y } : p;
-      if (drawLayerDirty || spatialDirty || !spatial.geoms || spatial.geoms.length !== list.length) {
+      if (spatialDirty || !spatial.geoms || spatial.geoms.length !== list.length || (!drawPanDx && spatial.key !== spatialKey(layout))) {
         rebuildSpatial(layout);
       }
-      if (selected >= 0 && list[selected]) {
+      const o = order();
+      // 依 z 順序：最上面、顯示中、沒鎖定的那條贏（選取那條的控制點優先）
+      let best = -1, bestR = -1;
+      if (selected >= 0 && list[selected] && pickable(o, selected)) {
         // selected 是即時幾何（目前視圖），用原始 p
         const G = geom(list[selected], layout);
         const hk = G.handles.findIndex(h => Math.abs(h.x - p.x) <= 6 && Math.abs(h.y - p.y) <= 6);
         if (hk >= 0) return { idx: selected, handle: hk };
+        if (hitGeom(p, G)) { best = selected; bestR = o.rank[selected]; }
       }
-      // hline 不在快取／空間索引裡，用目前視圖即時測
-      for (let k = list.length - 1; k >= 0; k--) {
-        if (list[k].type !== "hline" || k === selected) continue;
-        if (hitGeom(p, geom(list[k], layout))) return { idx: k, handle: -1 };
+      // hline 是視窗寬度線：用目前視圖即時測
+      for (let k = 0; k < list.length; k++) {
+        if (list[k].type !== "hline" || k === selected || !pickable(o, k) || o.rank[k] <= bestR) continue;
+        if (hitGeom(p, geom(list[k], layout))) { best = k; bestR = o.rank[k]; }
       }
       const { cell, cols, rows, buckets, geoms } = spatial;
       const c = Math.max(0, Math.min(cols - 1, Math.floor(q.x / cell)));
       const r = Math.max(0, Math.min(rows - 1, Math.floor(q.y / cell)));
       // 鄰近 3x3 cell，避免壓在邊界上漏打
-      const cand = [];
       const seen = new Set();
       for (let rr = Math.max(0, r - 1); rr <= Math.min(rows - 1, r + 1); rr++) {
         for (let cc = Math.max(0, c - 1); cc <= Math.min(cols - 1, c + 1); cc++) {
           const bucket = buckets[rr * cols + cc];
           for (let i = 0; i < bucket.length; i++) {
-            const idx = bucket[i];
-            if (!seen.has(idx)) { seen.add(idx); cand.push(idx); }
+            const k = bucket[i];
+            if (seen.has(k)) continue;
+            seen.add(k);
+            if (k === selected || !list[k] || list[k].type === "hline" || !pickable(o, k) || o.rank[k] <= bestR) continue;
+            if (hitGeom(q, geoms[k])) { best = k; bestR = o.rank[k]; }
           }
         }
       }
-      cand.sort((a, b) => b - a);
-      for (const k of cand) {
-        if (list[k] && list[k].type === "hline") continue;
-        if (hitGeom(q, geoms[k])) return { idx: k, handle: -1 };
-      }
-      return null;
+      return best >= 0 ? { idx: best, handle: -1 } : null;
     }
     // 拖控制點：矩形的 4 個角對應到 2 個點
     function applyHandle(d, hk, a, orig) {
@@ -1515,11 +1675,15 @@
 
     function finishDrawing(d) {
       delete d.dragging; delete d.sx; delete d.sy;
+      // 新畫線放進作用中的圖層（該層隱藏／鎖定就先打開，不然畫完看不到、點不到）
+      const al = layers().find(l => l.id === activeLayer) || layers()[layers().length - 1];
+      al.visible = true; al.locked = false;
+      if (al.id) d.layer = al.id; else delete d.layer;
       drawings().push(d);
       selected = drawings().length - 1;
       pending = null; tool = "cursor";
       markDrawingsDirty();
-      save(); sync();
+      save(); sync(); refreshLayerMenu();
     }
 
     // 文字註記用的輸入框（不用 window.prompt）
@@ -1581,7 +1745,7 @@
           drag = { idx: hit.idx, handle: hit.handle, start: toAnchor(p), orig: clone(drawings()[hit.idx].pts), moved: false };
         } else { selected = -1; pan = { x: p.x, right: view().right }; interactionBusy = true; }
         if (hit) interactionBusy = true;
-        if (selected !== prevSel) markDrawingsDirty();
+        if (selected !== prevSel) { markSelectionDirty(); refreshLayerMenu(); }
       }
       sync(); requestRender();
     });
@@ -1603,27 +1767,35 @@
       mouse = local(e);
       if (pan) { const v = view(); v.right = pan.right + (pan.x - mouse.x) / v.barW; }
       if (pending && pending.dragging) pending.pts[pending.pts.length - 1] = toAnchor(mouse);
-      if (drag && layout) {
-        const d = drawings()[drag.idx], a = toAnchor(mouse);
-        if (!d) { drag = null; return; }
-        drag.moved = true;
-        if (drag.handle >= 0) applyHandle(d, drag.handle, a, drag.orig);
-        else {
-          const di = a.i - drag.start.i, dp = a.p - drag.start.p;
-          d.pts = drag.orig.map(pt => ({ i: pt.i + di, p: pt.p + dp }));
-        }
-      }
+      if (drag && layout) dragTo(mouse);
       requestRender();
     });
-    window.addEventListener("mouseup", e => {
+    /** 拖曳選取的那條：它在三明治中間那片即時畫，上下兩段快取不動 */
+    function dragTo(m) {
+      const d = drawings()[drag.idx], a = toAnchor(m);
+      if (!d) { drag = null; return; }
+      drag.moved = true;
+      if (drag.handle >= 0) applyHandle(d, drag.handle, a, drag.orig);
+      else {
+        const di = a.i - drag.start.i, dp = a.p - drag.start.p;
+        d.pts = drag.orig.map(pt => ({ i: pt.i + di, p: pt.p + dp }));
+      }
+    }
+    /** 放開：平移 → 重建畫線層（補齊移入視窗的邊緣）；拖曳 → 被拖的那條仍是選取（不在上下兩段快取裡），不必重建 */
+    function endInteraction() {
       const wasBusy = interactionBusy || pan || drag;
+      const wasPan = !!pan;
       if (pan) pan = null;
-      if (drag) { if (drag.moved) { save(); markDrawingsDirty(); } drag = null; }
+      if (drag) { if (drag.moved) save(); drag = null; }
       if (wasBusy) {
         interactionBusy = false;
         invalidateSeriesMemo(); // 鬆手後補齊重指標
-        markDrawingsDirty();    // 平移結束重建畫線層（補齊移入視窗的邊緣）
+        if (wasPan) markDrawingsDirty();
+        else spatialDirty = true; // 被拖的那條換位置：命中索引下次用到時再建
       }
+    }
+    window.addEventListener("mouseup", e => {
+      endInteraction();
       if (pending && pending.dragging) {
         const p = local(e);
         pending.dragging = false;
@@ -1648,7 +1820,13 @@
       const t = e.target && e.target.tagName;
       if (t === "INPUT" || t === "TEXTAREA") return;
       if (e.key === "Delete" || e.key === "Backspace") { deleteSelected(); requestRender(); }
-      if (e.key === "Escape") { pending = null; tool = "cursor"; if (selected >= 0) markDrawingsDirty(); selected = -1; closeMenus(); sync(); requestRender(); }
+      if (e.key === "Escape") { pending = null; tool = "cursor"; if (selected >= 0) markSelectionDirty(); selected = -1; closeMenus(); sync(); requestRender(); }
+      // 上下順序：Ctrl+] 上移一層、Ctrl+[ 下移一層、加 Shift 移到最上／最下（Shift 時 e.key 是 } {）
+      if (e.ctrlKey || e.metaKey) {
+        const k = e.key, c = e.code;
+        if (k === "]" || k === "}" || c === "BracketRight") { e.preventDefault(); zop(e.shiftKey || k === "}" ? "front" : "forward"); }
+        else if (k === "[" || k === "{" || c === "BracketLeft") { e.preventDefault(); zop(e.shiftKey || k === "{" ? "back" : "backward"); }
+      }
     });
 
     // ---------- 即時行情 tick（高頻）：增量改最後一根指標，避免每 tick 全量 memo ----------
@@ -1892,6 +2070,7 @@
       let frames = 0, ticks = 0, renderMs = 0;
       const t0 = performance.now();
       const baseRight = view().right;
+      const z0 = { ...zperf };
       await new Promise(resolve => {
         function tick() {
           if (quote && entry) {
@@ -1926,7 +2105,175 @@
         avgRenderMs: frames ? +(renderMs / frames).toFixed(3) : 0,
         interact, count: drawings().length,
         overlays: entry && entry.overlays ? entry.overlays.length : 0,
+        ...zDelta(z0),
       };
+    }
+    function zDelta(z0) {
+      const sp = zperf.selPaints - z0.selPaints;
+      return {
+        drawRebuilds: zperf.rebuilds - z0.rebuilds,
+        rebuildMsTotal: +(zperf.rebuildMs - z0.rebuildMs).toFixed(2),
+        selPaints: sp,
+        selMs: sp ? +((zperf.selMs - z0.selMs) / sp).toFixed(3) : 0,
+      };
+    }
+
+    // ---------- 圖層／上下順序壓測（流程與 gpui／egui 的 zstress.rs 相同） ----------
+    let zPick = -1;
+    /** 1000 條壓測畫線分到 nlayers 層（第 k 條放 k % n 層）；拖曳／reorder 目標＝第 31 個矩形，移到疊放順序正中間、放在中間那層 */
+    function __perfLayers(nlayers) {
+      const list = drawings(), n = list.length;
+      const rectStart = Math.floor(n * 40 / 100) + Math.floor(n * 8 / 100) * 3 + Math.floor(n * 12 / 100) * 2;
+      const rects = Math.floor(n * 6 / 100);
+      zPick = -1;
+      if (rects > 0) {
+        const k = rectStart + Math.min(30, rects - 1);
+        if (k < n) { const [d] = list.splice(k, 1); list.splice(Math.floor(n / 2), 0, d); zPick = Math.floor(n / 2); }
+      }
+      const nl = Math.max(1, Math.min(MAX_LAYERS, nlayers | 0 || 1));
+      for (let k = 0; k < n; k++) { const id = k % nl; if (id) list[k].layer = id; else delete list[k].layer; }
+      entry.layers = [];
+      for (let i = 0; i < nl; i++) entry.layers.push(newLayer(i));
+      if (zPick >= 0) { const id = Math.floor(nl / 2); if (id) list[zPick].layer = id; else delete list[zPick].layer; }
+      activeLayer = entry.layers[nl - 1].id;
+      selected = -1; drag = null; markDrawingsDirty(); render();
+      return { layers: nl, pick: zPick };
+    }
+    function zCenter(k) {
+      const d = drawings()[k];
+      if (!d || !layout) return null;
+      const bb = geomBBox(geom(d, layout), 8);
+      return bb && { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
+    }
+    function zSelect(k) {
+      if (selected === k) return;
+      selected = k; markSelectionDirty();
+    }
+    function zBeginDrag(k, q) {
+      zSelect(k);
+      drag = { idx: k, handle: -1, start: toAnchor(q), orig: clone(drawings()[k].pts), moved: false };
+      interactionBusy = true; mouse = q;
+    }
+    const pctl = (v, q) => { if (!v.length) return 0; v = v.slice().sort((a, b) => a - b); return v[Math.min(v.length, Math.max(1, Math.ceil(v.length * q))) - 1]; };
+    /** 一段圖層壓測：mode = drag | select | reorder | zshot；回傳 CHARTPERF 欄位 */
+    async function __perfZPhase(mode, ms, nlayers) {
+      if (!quote || !entry || !layout) throw new Error("chart not ready");
+      render();
+      const samples = []; // [kind, rebuildMs, ttfMs]
+      let pend = null, q0 = { x: 0, y: 0 }, last = q0, cand = [];
+      if (mode === "drag" || mode === "reorder") {
+        if (zPick < 0) throw new Error("no pick");
+      }
+      if (mode === "drag") {
+        q0 = zCenter(zPick); last = q0; zBeginDrag(zPick, q0);
+      } else if (mode === "select") {
+        zSelect(-1); render();
+        const o = order(), w = layout.plotR - layout.plotL, pr = layout.panes[0];
+        const cl = layout.plotL - w * 0.5, cr = layout.plotR + w * 0.5;
+        for (const k of o.order) {
+          if (!pickable(o, k)) continue;
+          const bb = geomBBox(geom(drawings()[k], layout), 8);
+          if (!bb || bb.maxX < cl || bb.minX > cr || bb.maxY < pr.top || bb.minY > pr.top + pr.h) continue;
+          cand.push(k);
+        }
+      } else if (mode === "reorder") {
+        zSelect(zPick);
+      } else if (mode === "zshot") {
+        // 截圖要看得清楚：關掉疊加與副圖，只留 K 棒＋畫線
+        entry.overlays = [];
+        const c = cfg();
+        for (const id of SUB_ORDER) if (c[id]) c[id].on = false;
+        if (c.volma) c.volma.on = false;
+        ensureSubLayout(); invalidateSeriesMemo();
+        selected = -1; drag = null; markDrawingsDirty(); render();
+        const pr = layout.panes[0], i0 = layout.idxAt(layout.plotL), i1 = layout.idxAt(layout.plotR);
+        const at = (fx, fy) => ({ i: i0 + fx * (i1 - i0), p: pr.lo + fy * (pr.hi - pr.lo) });
+        const mk = (type, pts, text, layer) => { const d = { type, pts }; if (text) d.text = text; if (layer) d.layer = layer; return d; };
+        entry.drawings = [
+          mk("rect", [at(0.08, 0.80), at(0.42, 0.30)], "", 0),
+          mk("trend", [at(0.04, 0.22), at(0.96, 0.78)], "", 0),
+          mk("rect", [at(0.28, 0.68), at(0.66, 0.18)], "", 1),
+          mk("text", [at(0.24, 0.68)], "上層文字框 ABOVE ABOVE ABOVE", 2),
+          mk("text", [at(0.24, 0.18)], "上層文字框 ABOVE ABOVE ABOVE", 2),
+          mk("fib", [at(0.56, 0.74), at(0.86, 0.26)], "", 2),
+          mk("trend", [at(0.04, 0.72), at(0.96, 0.12)], "", 2),
+        ];
+        entry.layers = [newLayer(0), newLayer(1), newLayer(2)];
+        entry.layers[0].name = "底層"; entry.layers[1].name = "中層（拖曳中）"; entry.layers[2].name = "上層";
+        activeLayer = 2;
+        markDrawingsDirty(); render();
+        q0 = zCenter(2); last = q0; zBeginDrag(2, q0);
+      }
+      const z0 = { ...zperf };
+      let frames = 0, renderMs = 0;
+      const t0 = performance.now();
+      await new Promise(resolve => {
+        function tick() {
+          const now = performance.now();
+          if (pend) { samples.push([pend.kind, zperf.rebuildMs - pend.rb, now - pend.t]); pend = null; }
+          const f = frames;
+          if (mode === "drag") {
+            const bars = series().bars, lastBar = bars[bars.length - 1];
+            applyTick({ price: lastBar.c + Math.sin(f / 7) * 0.15, volumeDelta: 1, sync: false });
+            last = { x: q0.x + Math.sin(f / 9) * 40, y: q0.y + Math.cos(f / 11) * 25 - 25 };
+            mouse = last; dragTo(last);
+          } else if (mode === "zshot") {
+            last = { x: q0.x + Math.sin(f / 10) * 12, y: q0.y };
+            mouse = last; dragTo(last);
+          } else if (mode === "select" && cand.length) {
+            const t = performance.now(), rb = zperf.rebuildMs;
+            if (f % 2 === 0) { zSelect(cand[(Math.floor(f / 2) * 37) % cand.length]); pend = { kind: "select", t, rb }; }
+            else { zSelect(-1); pend = { kind: "deselect", t, rb }; }
+          } else if (mode === "reorder") {
+            const n = nlayers > 1 ? 8 : 4, other = Math.floor(nlayers / 4);
+            const t = performance.now(), rb = zperf.rebuildMs;
+            let kind = "zop";
+            switch (f % n) {
+              case 0: zop("forward"); break;
+              case 1: zop("backward"); break;
+              case 2: zop("front"); break;
+              case 3: zop("back"); break;
+              case 4: case 5: kind = "layerVis"; layerToggleVisible(other); break;
+              case 6: kind = "layerMove"; layerMove(other, true); break;
+              default: kind = "layerMove"; layerMove(other, false);
+            }
+            pend = { kind, t, rb };
+          }
+          const r0 = performance.now();
+          queued = false; // 這一幀已經畫了：操作途中排進 rAF 的重畫取消（一幀只畫一次）
+          render();
+          renderMs += performance.now() - r0;
+          frames++;
+          if (performance.now() - t0 >= ms) resolve();
+          else requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      });
+      const elapsed = performance.now() - t0;
+      const out = {
+        seconds: +(elapsed / 1000).toFixed(2), frames, fps: +(frames * 1000 / elapsed).toFixed(1),
+        avgPaintMs: frames ? +(renderMs / frames).toFixed(3) : 0,
+        ...zDelta(z0),
+        layers: layers().length, drawingsTotal: drawings().length,
+      };
+      if (zPick >= 0 && mode !== "zshot") out.pick = zPick;
+      const stat = (name, kinds) => {
+        const xs = samples.filter(x => kinds.includes(x[0]));
+        if (!xs.length) return;
+        const rb = xs.map(x => x[1]), tf = xs.map(x => x[2]);
+        out[name + "Ops"] = xs.length;
+        out[name + "RebuildP50"] = +pctl(rb, 0.5).toFixed(3); out[name + "RebuildP99"] = +pctl(rb, 0.99).toFixed(3);
+        out[name + "TtfP50"] = +pctl(tf, 0.5).toFixed(3); out[name + "TtfP99"] = +pctl(tf, 0.99).toFixed(3);
+      };
+      stat("all", ["select", "deselect", "zop", "layerVis", "layerMove"]);
+      stat("select", ["select"]); stat("deselect", ["deselect"]);
+      stat("zop", ["zop"]); stat("layerVis", ["layerVis"]); stat("layerMove", ["layerMove"]);
+      // 收尾
+      if (mode === "drag") { endInteraction(); zSelect(-1); mouse = null; }
+      else if (mode === "select" || mode === "reorder") { zSelect(-1); }
+      else if (mode === "zshot") { endInteraction(); }
+      render();
+      return out;
     }
 
     function dropSymbolCache(symbol) {
@@ -2067,6 +2414,7 @@
       __perf: {
         clear: __perfClear, addN: __perfAddN, setupStress: __perfSetupStress, setupLight: __perfSetupLight,
         measure: __perfMeasure, continuous: __perfContinuous,
+        layers: __perfLayers, zphase: __perfZPhase,
         count: () => (entry ? drawings().length : 0),
         snapshot: () => entry ? {
           overlays: (entry.overlays || []).length,

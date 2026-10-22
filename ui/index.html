@@ -83,6 +83,16 @@
     box-shadow: 0 6px 18px rgba(0,0,0,0.5); padding: 6px; overflow-y: auto; font-size: 12px; }
   .tb-menu[hidden] { display: none; }
   .ind-menu { width: 440px; }
+  .layer-menu { width: 360px; }
+  .layer-menu button { height: 20px; padding: 0 5px; font-size: 11px; }
+  .layer-menu button:disabled { opacity: 0.4; }
+  .layer-zops { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+  .layer-head { display: flex; align-items: center; justify-content: space-between; }
+  .layer-rows { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; }
+  .layer-row { display: flex; align-items: center; gap: 4px; padding: 1px 3px; border-radius: 3px; }
+  .layer-row.active { background: #1f3a66; }
+  .layer-name { flex: 1; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .layer-name.off { color: var(--dim); }
   .ind-menu .menu-item { margin-top: 6px; }
   .menu-title { color: var(--dim); margin: 4px 2px 3px; border-bottom: 1px solid #333; padding-bottom: 2px; }
   .ind-row { display: flex; align-items: center; gap: 5px; padding: 2px; white-space: nowrap; }
@@ -1575,15 +1585,26 @@
         catch (e) { await sleep(50); }
       }
       if (!info) { report({ phase: "error", msg: "chart not ready" }); return; }
+      // 1000 條畫線分到 XQ_CHART_LAYERS 層（預設 100）；拖曳目標＝疊放順序正中間的半透明矩形
+      const nlayers = o.layers || 100;
+      const zinfo = chart.__perf.layers(nlayers);
       await raf2();
       send({ type: "log", msg: "BENCH heavy-frame" });
-      report({ phase: "setup", sinceStartMs: Math.round(performance.now() - t0), ...info });
+      report({ phase: "setup", sinceStartMs: Math.round(performance.now() - t0), ...info, layers: zinfo.layers, pick: zinfo.pick });
       phase("warm", "start");
       await chart.__perf.continuous(o.warmMs || 3000, { interact: null });
       for (const [name, interact] of [["ticks", null], ["crosshair", "mousemove"], ["pan", "pan"]]) {
         phase(name, "start");
         const r = await chart.__perf.continuous(o.phaseMs || 10000, { interact });
-        report({ phase: name, seconds: +(r.elapsedMs / 1000).toFixed(2), frames: r.frames, fps: r.fps, avgPaintMs: r.avgRenderMs, tickHz: r.tickHz });
+        report({ phase: name, seconds: +(r.elapsedMs / 1000).toFixed(2), frames: r.frames, fps: r.fps, avgPaintMs: r.avgRenderMs, tickHz: r.tickHz,
+                 drawRebuilds: r.drawRebuilds, rebuildMsTotal: r.rebuildMsTotal, selPaints: r.selPaints, selMs: r.selMs });
+        phase(name, "end");
+      }
+      // 圖層／上下順序四段（同 gpui／egui zstress.rs）：拖曳中間那條／選取↔取消／上下移＋圖層顯示切換＋圖層上下移／正確性截圖場景
+      for (const [name, ms] of [["drag", o.phaseMs || 10000], ["select", o.phaseMs || 10000], ["reorder", o.phaseMs || 10000], ["zshot", 3000]]) {
+        phase(name, "start");
+        const r = await chart.__perf.zphase(name, ms, nlayers);
+        report({ phase: name, ...r });
         phase(name, "end");
       }
       report({ phase: "done", sinceStartMs: Math.round(performance.now() - t0) });
